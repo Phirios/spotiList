@@ -72,6 +72,24 @@ type Row = {
   trailing?: string;
 };
 
+type AutoSummary = {
+  id: string;
+  name: string;
+  description: string | null;
+  track_count: number;
+  spotify_playlist_id: string | null;
+  created_at: string;
+  sample: TrackOut[];
+};
+
+type TrackOut = {
+  id: string;
+  name: string;
+  artists: string[];
+  album: string;
+  image_url: string | null;
+};
+
 export default function Dashboard() {
   const [me, setMe] = useState<Me | null>(null);
   const [liked, setLiked] = useState<LikedResponse | null>(null);
@@ -86,6 +104,13 @@ export default function Dashboard() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<{ url: string; name: string } | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const [autos, setAutos] = useState<AutoSummary[] | null>(null);
+  const [autosLoading, setAutosLoading] = useState(true);
+  const [regenerating, setRegenerating] = useState(false);
+  const [autoError, setAutoError] = useState<string | null>(null);
+  const [autoSaving, setAutoSaving] = useState<string | null>(null);
+  const [autoSaved, setAutoSaved] = useState<Record<string, string>>({});
 
   const [expanded, setExpanded] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, TrackInfo>>({});
@@ -111,8 +136,59 @@ export default function Dashboard() {
       } finally {
         setLoading(false);
       }
+
+      try {
+        const r = await fetch("/api/auto-playlists", { credentials: "include" });
+        if (r.ok) setAutos(await r.json());
+      } catch {
+        // ignore — will surface on regenerate
+      } finally {
+        setAutosLoading(false);
+      }
     })();
   }, []);
+
+  async function handleRegenerate() {
+    setRegenerating(true);
+    setAutoError(null);
+    try {
+      const r = await fetch("/api/auto-playlists/regenerate", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!r.ok) {
+        const text = await r.text();
+        throw new Error(`${r.status}: ${text}`);
+      }
+      const data = (await r.json()) as { playlists: AutoSummary[] };
+      setAutos(data.playlists);
+      setAutoSaved({});
+    } catch (e) {
+      setAutoError(String(e));
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  async function handleSaveAuto(p: AutoSummary) {
+    setAutoSaving(p.id);
+    try {
+      const r = await fetch(`/api/auto-playlists/${p.id}/save`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!r.ok) {
+        const text = await r.text();
+        throw new Error(`${r.status}: ${text}`);
+      }
+      const data = (await r.json()) as { url: string };
+      setAutoSaved((prev) => ({ ...prev, [p.id]: data.url }));
+    } catch (e) {
+      setAutoError(String(e));
+    } finally {
+      setAutoSaving(null);
+    }
+  }
 
   const toggleTrack = useCallback(
     async (id: string) => {
@@ -315,6 +391,52 @@ export default function Dashboard() {
           )}
         </section>
 
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-5">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-xl font-semibold text-white mb-1">
+                Smart playlists
+              </h2>
+              <p className="text-zinc-400 text-sm">
+                Auto-clustered groups across your library by metadata
+                correlation.
+              </p>
+            </div>
+            <button
+              onClick={handleRegenerate}
+              disabled={regenerating}
+              className="rounded-full border border-emerald-500 text-emerald-400 px-4 py-1.5 text-xs font-semibold hover:bg-emerald-500/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            >
+              {regenerating
+                ? "Regenerating…"
+                : autos && autos.length > 0
+                  ? "Regenerate"
+                  : "Generate"}
+            </button>
+          </div>
+          {autoError && <p className="text-red-400 text-xs">{autoError}</p>}
+          {autosLoading && !autos ? (
+            <p className="text-zinc-500 text-sm">Loading…</p>
+          ) : !autos || autos.length === 0 ? (
+            <p className="text-zinc-500 text-sm">
+              No smart playlists yet. Click Generate — first run takes longer
+              while embeddings are computed.
+            </p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {autos.map((p) => (
+                <AutoCard
+                  key={p.id}
+                  p={p}
+                  saving={autoSaving === p.id}
+                  savedUrl={autoSaved[p.id] ?? null}
+                  onSave={() => handleSaveAuto(p)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
         {liked && (
           <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-6">
             <div>
@@ -492,6 +614,67 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{label}</div>
       <div>{children}</div>
+    </div>
+  );
+}
+
+function AutoCard({
+  p,
+  saving,
+  savedUrl,
+  onSave,
+}: {
+  p: AutoSummary;
+  saving: boolean;
+  savedUrl: string | null;
+  onSave: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-black/40 p-5 flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="text-white font-semibold capitalize truncate">
+            {p.name}
+          </div>
+          <div className="text-xs text-zinc-500">{p.track_count} tracks</div>
+        </div>
+        {savedUrl ? (
+          <a
+            href={savedUrl}
+            target="_blank"
+            rel="noopener"
+            className="rounded-full bg-emerald-500 px-3 py-1 text-xs font-semibold text-black hover:bg-emerald-400 flex-shrink-0"
+          >
+            Open ↗
+          </a>
+        ) : (
+          <button
+            onClick={onSave}
+            disabled={saving}
+            className="rounded-full border border-emerald-500 text-emerald-400 px-3 py-1 text-xs font-semibold hover:bg-emerald-500/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        )}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {p.sample.map((t) => (
+          <div key={t.id} className="flex items-center gap-2 min-w-0">
+            {t.image_url && (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={t.image_url}
+                alt=""
+                className="h-6 w-6 rounded object-cover flex-shrink-0"
+              />
+            )}
+            <span className="text-zinc-300 text-xs truncate">
+              {t.name}{" "}
+              <span className="text-zinc-500">— {t.artists.join(", ")}</span>
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

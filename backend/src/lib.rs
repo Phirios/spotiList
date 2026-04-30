@@ -1,9 +1,11 @@
 pub mod auth;
+pub mod auto;
 pub mod bpm;
 pub mod db;
 pub mod embeddings;
 pub mod error;
 pub mod lastfm;
+pub mod library;
 pub mod lyrics;
 pub mod me;
 pub mod model;

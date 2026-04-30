@@ -3,3 +3,5 @@ uvicorn[standard]==0.32.0
 sentence-transformers==3.2.1
 torch==2.5.1
 pydantic==2.9.2
+scikit-learn==1.5.2
+numpy==2.1.3

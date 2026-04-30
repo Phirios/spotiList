@@ -29,6 +29,10 @@ impl EmbedderClient {
         Self { http, base_url }
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     pub async fn embed(&self, texts: &[String]) -> AppResult<EmbedResponse> {
         let resp = self
             .http
