@@ -25,7 +25,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, msg) = match &self {
             AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
-            AppError::Auth(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::Auth(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Upstream(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
