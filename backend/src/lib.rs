@@ -1,11 +1,13 @@
 pub mod auth;
 pub mod bpm;
 pub mod db;
+pub mod embeddings;
 pub mod error;
 pub mod lastfm;
 pub mod lyrics;
 pub mod me;
 pub mod model;
+pub mod playlists;
 pub mod routes;
 pub mod spotify;
 pub mod user;
@@ -21,6 +23,8 @@ pub struct AppState {
     pub bpm: Arc<bpm::GetSongBpmClient>,
     pub lyrics: Arc<lyrics::LrcLibClient>,
     pub lastfm: Arc<lastfm::LastFmClient>,
+    pub embedder: Arc<embeddings::EmbedderClient>,
+    pub embedder_model: String,
     pub db: db::Pool,
     pub cookie_key: Key,
     pub cookie_secure: bool,
@@ -37,6 +41,8 @@ pub struct Config {
     pub database_url: String,
     pub session_secret: String,
     pub cookie_secure: bool,
+    pub embedder_url: String,
+    pub embedder_model: String,
     pub getsongbpm_api_key: Option<String>,
     pub lastfm_api_key: Option<String>,
     pub user_agent: String,
@@ -55,6 +61,10 @@ impl Config {
             cookie_secure: std::env::var("COOKIE_SECURE")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            embedder_url: std::env::var("EMBEDDER_URL")
+                .unwrap_or_else(|_| "http://spoti-embedder.nlp-project.svc.cluster.local:8000".into()),
+            embedder_model: std::env::var("EMBEDDER_MODEL")
+                .unwrap_or_else(|_| "sentence-transformers/all-MiniLM-L6-v2".into()),
             getsongbpm_api_key: std::env::var("GETSONGBPM_API_KEY").ok(),
             lastfm_api_key: std::env::var("LASTFM_API_KEY").ok(),
             user_agent: std::env::var("USER_AGENT")
@@ -70,7 +80,7 @@ fn req_env(key: &str) -> anyhow::Result<String> {
 pub async fn build_state(cfg: Config) -> anyhow::Result<AppState> {
     let http = reqwest::Client::builder()
         .user_agent(&cfg.user_agent)
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
     let pool = db::connect(&cfg.database_url).await?;
@@ -95,6 +105,11 @@ pub async fn build_state(cfg: Config) -> anyhow::Result<AppState> {
         )),
         lyrics: Arc::new(lyrics::LrcLibClient::new(http.clone())),
         lastfm: Arc::new(lastfm::LastFmClient::new(http.clone(), cfg.lastfm_api_key)),
+        embedder: Arc::new(embeddings::EmbedderClient::new(
+            http.clone(),
+            cfg.embedder_url,
+        )),
+        embedder_model: cfg.embedder_model,
         db: pool,
         cookie_key,
         cookie_secure: cfg.cookie_secure,

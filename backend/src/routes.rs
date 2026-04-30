@@ -14,6 +14,7 @@ pub fn router(state: AppState) -> Router {
         .route("/tracks/:id", get(get_track))
         .merge(crate::auth::router())
         .merge(crate::me::router())
+        .merge(crate::playlists::router())
         .with_state(state)
 }
 
