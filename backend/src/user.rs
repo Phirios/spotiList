@@ -11,6 +11,7 @@ pub struct User {
     pub spotify_id: String,
     pub display_name: Option<String>,
     pub email: Option<String>,
+    pub image_url: Option<String>,
     #[serde(skip)]
     pub access_token: String,
     #[serde(skip)]
@@ -25,6 +26,7 @@ pub struct UpsertUser<'a> {
     pub spotify_id: &'a str,
     pub display_name: Option<&'a str>,
     pub email: Option<&'a str>,
+    pub image_url: Option<&'a str>,
     pub access_token: &'a str,
     pub refresh_token: &'a str,
     pub expires_at: DateTime<Utc>,
@@ -34,11 +36,12 @@ pub struct UpsertUser<'a> {
 pub async fn upsert(pool: &Pool, u: UpsertUser<'_>) -> anyhow::Result<User> {
     let row = sqlx::query_as::<_, User>(
         r#"
-        INSERT INTO users (spotify_id, display_name, email, access_token, refresh_token, expires_at, scope)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO users (spotify_id, display_name, email, image_url, access_token, refresh_token, expires_at, scope)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (spotify_id) DO UPDATE SET
             display_name = EXCLUDED.display_name,
             email = EXCLUDED.email,
+            image_url = COALESCE(EXCLUDED.image_url, users.image_url),
             access_token = EXCLUDED.access_token,
             refresh_token = EXCLUDED.refresh_token,
             expires_at = EXCLUDED.expires_at,
@@ -50,6 +53,7 @@ pub async fn upsert(pool: &Pool, u: UpsertUser<'_>) -> anyhow::Result<User> {
     .bind(u.spotify_id)
     .bind(u.display_name)
     .bind(u.email)
+    .bind(u.image_url)
     .bind(u.access_token)
     .bind(u.refresh_token)
     .bind(u.expires_at)

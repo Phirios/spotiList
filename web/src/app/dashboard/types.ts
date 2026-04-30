@@ -3,6 +3,7 @@ export type Me = {
   spotify_id: string;
   display_name: string | null;
   email: string | null;
+  image_url: string | null;
 };
 
 export type LibraryItem = {

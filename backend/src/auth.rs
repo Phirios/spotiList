@@ -96,12 +96,16 @@ async fn callback(
         .as_deref()
         .ok_or_else(|| AppError::Auth("no refresh_token".into()))?;
 
+    // Pick the smallest image >= 64px, falling back to the first one.
+    let image_url = pick_profile_image(&profile.images);
+
     let saved = user::upsert(
         &state.db,
         UpsertUser {
             spotify_id: &profile.id,
             display_name: profile.display_name.as_deref(),
             email: profile.email.as_deref(),
+            image_url: image_url.as_deref(),
             access_token: &token.access_token,
             refresh_token: refresh,
             expires_at,
@@ -143,6 +147,7 @@ async fn me(
         spotify_id: user.spotify_id,
         display_name: user.display_name,
         email: user.email,
+        image_url: user.image_url,
     }))
 }
 
@@ -152,6 +157,20 @@ struct MeResponse {
     spotify_id: String,
     display_name: Option<String>,
     email: Option<String>,
+    image_url: Option<String>,
+}
+
+fn pick_profile_image(images: &[SpotifyImage]) -> Option<String> {
+    if images.is_empty() {
+        return None;
+    }
+    // Prefer a small-but-not-tiny image (~ 64–300px tall) for a 32px avatar.
+    images
+        .iter()
+        .filter(|i| matches!(i.height, Some(h) if (64..=300).contains(&h)))
+        .min_by_key(|i| i.height.unwrap_or(u32::MAX))
+        .map(|i| i.url.clone())
+        .or_else(|| images.first().map(|i| i.url.clone()))
 }
 
 pub async fn current_user(state: &AppState, jar: &PrivateCookieJar) -> AppResult<User> {
@@ -251,6 +270,15 @@ struct SpotifyMe {
     id: String,
     display_name: Option<String>,
     email: Option<String>,
+    #[serde(default)]
+    images: Vec<SpotifyImage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpotifyImage {
+    url: String,
+    #[serde(default)]
+    height: Option<u32>,
 }
 
 async fn fetch_profile(state: &AppState, token: &str) -> AppResult<SpotifyMe> {

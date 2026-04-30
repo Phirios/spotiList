@@ -116,6 +116,7 @@ function Dashboard() {
         spotify_id: "phirios",
         display_name: "Phirios",
         email: "kirazh27@gmail.com",
+        image_url: "https://picsum.photos/seed/phirios-avatar/200",
       });
       setLibrary(dummyLibraryPage(0, 30, null));
       setAutos(dummyAutos());

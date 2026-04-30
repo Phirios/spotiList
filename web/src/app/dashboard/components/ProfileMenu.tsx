@@ -36,9 +36,18 @@ export function ProfileMenu({
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-3 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 hover:bg-zinc-900 text-left"
       >
-        <span className="h-8 w-8 rounded-full bg-emerald-500 text-black flex items-center justify-center font-semibold text-sm">
-          {initial}
-        </span>
+        {me.image_url ? (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={me.image_url}
+            alt=""
+            className="h-8 w-8 rounded-full object-cover flex-shrink-0"
+          />
+        ) : (
+          <span className="h-8 w-8 rounded-full bg-emerald-500 text-black flex items-center justify-center font-semibold text-sm">
+            {initial}
+          </span>
+        )}
         <span className="flex-1 min-w-0">
           <span className="block text-white text-sm truncate">
             {me.display_name ?? me.spotify_id}

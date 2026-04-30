@@ -41,6 +41,8 @@ export const DUMMY_TOTAL = 2873;
 export const dummyImage = (id: string) =>
   `https://picsum.photos/seed/${id}/200`;
 
+export const dummyMeImage = "https://picsum.photos/seed/phirios-avatar/200";
+
 export const dummyLibraryPage = (
   offset: number,
   limit: number,
