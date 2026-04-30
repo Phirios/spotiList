@@ -139,7 +139,13 @@ impl SpotifyClient {
             .await?;
 
         match resp.status() {
-            s if s.is_success() => Ok(resp.json().await?),
+            s if s.is_success() => {
+                let body = resp.text().await?;
+                serde_json::from_str(&body).map_err(|e| {
+                    tracing::error!(error = %e, body = %body, "failed to parse track response");
+                    AppError::Upstream(format!("parse track {id}: {e}"))
+                })
+            }
             reqwest::StatusCode::NOT_FOUND => {
                 Err(AppError::NotFound(format!("track {id} not found")))
             }
@@ -174,7 +180,12 @@ impl SpotifyClient {
             )));
         }
 
-        let parsed: ArtistsResponse = resp.json().await?;
-        Ok(parsed.artists)
+        let body = resp.text().await?;
+        serde_json::from_str::<ArtistsResponse>(&body)
+            .map(|p| p.artists)
+            .map_err(|e| {
+                tracing::error!(error = %e, body = %body, "failed to parse artists response");
+                AppError::Upstream(format!("parse artists: {e}"))
+            })
     }
 }
