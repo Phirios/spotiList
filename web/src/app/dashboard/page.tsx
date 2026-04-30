@@ -27,11 +27,32 @@ type LikedResponse = {
   offset: number;
 };
 
+type RankedTrack = {
+  id: string;
+  name: string;
+  artists: string[];
+  album: string;
+  image_url: string | null;
+  score: number;
+};
+
+type GeneratedPlaylist = {
+  vibe: string;
+  model: string;
+  considered: number;
+  items: RankedTrack[];
+};
+
 export default function Dashboard() {
   const [me, setMe] = useState<Me | null>(null);
   const [liked, setLiked] = useState<LikedResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const [vibe, setVibe] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [generated, setGenerated] = useState<GeneratedPlaylist | null>(null);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -55,6 +76,31 @@ export default function Dashboard() {
     })();
   }, []);
 
+  async function handleGenerate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!vibe.trim()) return;
+    setGenerating(true);
+    setGenerateError(null);
+    setGenerated(null);
+    try {
+      const r = await fetch("/api/playlists/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ vibe, limit: 20 }),
+      });
+      if (!r.ok) {
+        const text = await r.text();
+        throw new Error(`${r.status}: ${text}`);
+      }
+      setGenerated(await r.json());
+    } catch (err) {
+      setGenerateError(String(err));
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     window.location.href = "/";
@@ -77,6 +123,67 @@ export default function Dashboard() {
           {error && <p className="text-red-400 text-sm">{error}</p>}
         </header>
 
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-5">
+          <div>
+            <h2 className="text-xl font-semibold text-white mb-1">
+              Generate a vibe playlist
+            </h2>
+            <p className="text-zinc-400 text-sm">
+              Describe a mood. We&rsquo;ll search your liked songs.
+            </p>
+          </div>
+          <form onSubmit={handleGenerate} className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="text"
+              value={vibe}
+              onChange={(e) => setVibe(e.target.value)}
+              placeholder="late-night drive after a long week"
+              className="flex-1 rounded-full bg-black border border-zinc-800 px-5 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500"
+            />
+            <button
+              type="submit"
+              disabled={generating || !vibe.trim()}
+              className="rounded-full bg-emerald-500 px-6 py-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {generating ? "Generating…" : "Generate"}
+            </button>
+          </form>
+          {generateError && (
+            <p className="text-red-400 text-sm">{generateError}</p>
+          )}
+          {generated && (
+            <div className="flex flex-col gap-2">
+              <p className="text-zinc-500 text-xs">
+                {generated.items.length} of {generated.considered} liked songs ·{" "}
+                model: {generated.model.split("/").pop()}
+              </p>
+              <ul className="divide-y divide-zinc-900">
+                {generated.items.map((t) => (
+                  <li key={t.id} className="flex items-center gap-4 py-3">
+                    {t.image_url && (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={t.image_url}
+                        alt=""
+                        className="h-12 w-12 rounded object-cover"
+                      />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white truncate">{t.name}</div>
+                      <div className="text-sm text-zinc-400 truncate">
+                        {t.artists.join(", ")} · {t.album}
+                      </div>
+                    </div>
+                    <div className="text-xs text-zinc-500 hidden sm:block tabular-nums">
+                      {t.score.toFixed(3)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+
         {liked && (
           <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-6">
             <div>
@@ -90,10 +197,7 @@ export default function Dashboard() {
             </div>
             <ul className="divide-y divide-zinc-900">
               {liked.items.map(({ track, added_at }) => (
-                <li
-                  key={track.id}
-                  className="flex items-center gap-4 py-3"
-                >
+                <li key={track.id} className="flex items-center gap-4 py-3">
                   {track.album.images?.[0]?.url && (
                     /* eslint-disable-next-line @next/next/no-img-element */
                     <img
