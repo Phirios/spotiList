@@ -4,6 +4,7 @@ pub mod db;
 pub mod error;
 pub mod lastfm;
 pub mod lyrics;
+pub mod me;
 pub mod model;
 pub mod routes;
 pub mod spotify;

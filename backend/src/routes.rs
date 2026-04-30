@@ -13,6 +13,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/tracks/:id", get(get_track))
         .merge(crate::auth::router())
+        .merge(crate::me::router())
         .with_state(state)
 }
 
