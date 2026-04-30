@@ -3,6 +3,7 @@ pub mod bpm;
 pub mod db;
 pub mod embeddings;
 pub mod error;
+pub mod flaresolverr;
 pub mod lastfm;
 pub mod lyrics;
 pub mod me;
@@ -43,6 +44,7 @@ pub struct Config {
     pub cookie_secure: bool,
     pub embedder_url: String,
     pub embedder_model: String,
+    pub flaresolverr_url: Option<String>,
     pub getsongbpm_api_key: Option<String>,
     pub lastfm_api_key: Option<String>,
     pub user_agent: String,
@@ -65,6 +67,7 @@ impl Config {
                 .unwrap_or_else(|_| "http://spoti-embedder.nlp-project.svc.cluster.local:8000".into()),
             embedder_model: std::env::var("EMBEDDER_MODEL")
                 .unwrap_or_else(|_| "sentence-transformers/all-MiniLM-L6-v2".into()),
+            flaresolverr_url: std::env::var("FLARESOLVERR_URL").ok(),
             getsongbpm_api_key: std::env::var("GETSONGBPM_API_KEY").ok(),
             lastfm_api_key: std::env::var("LASTFM_API_KEY").ok(),
             user_agent: std::env::var("USER_AGENT")
@@ -80,7 +83,7 @@ fn req_env(key: &str) -> anyhow::Result<String> {
 pub async fn build_state(cfg: Config) -> anyhow::Result<AppState> {
     let http = reqwest::Client::builder()
         .user_agent(&cfg.user_agent)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(90))
         .build()?;
 
     let pool = db::connect(&cfg.database_url).await?;
@@ -92,6 +95,23 @@ pub async fn build_state(cfg: Config) -> anyhow::Result<AppState> {
     let derived = Sha512::digest(cfg.session_secret.as_bytes());
     let cookie_key = Key::from(&derived);
 
+    let flaresolverr = match cfg.flaresolverr_url {
+        Some(url) => {
+            let client = Arc::new(flaresolverr::FlareSolverrClient::new(http.clone(), url));
+            // Warm up in the background — if this fails, BPM lookups will
+            // simply return None until it succeeds. Doesn't block startup.
+            let warm = client.clone();
+            tokio::spawn(async move {
+                match warm.ensure_session().await {
+                    Ok(()) => tracing::info!("flaresolverr session warmed"),
+                    Err(e) => tracing::warn!(error = %e, "flaresolverr warmup failed"),
+                }
+            });
+            Some(client)
+        }
+        None => None,
+    };
+
     Ok(AppState {
         http: http.clone(),
         spotify: Arc::new(spotify::SpotifyClient::new(
@@ -100,8 +120,8 @@ pub async fn build_state(cfg: Config) -> anyhow::Result<AppState> {
             cfg.spotify_client_secret.clone(),
         )),
         bpm: Arc::new(bpm::GetSongBpmClient::new(
-            http.clone(),
             cfg.getsongbpm_api_key,
+            flaresolverr,
         )),
         lyrics: Arc::new(lyrics::LrcLibClient::new(http.clone())),
         lastfm: Arc::new(lastfm::LastFmClient::new(http.clone(), cfg.lastfm_api_key)),

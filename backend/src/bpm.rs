@@ -1,10 +1,14 @@
+use std::sync::Arc;
+
 use serde::Deserialize;
+
+use crate::flaresolverr::FlareSolverrClient;
 
 const API_BASE: &str = "https://api.getsongbpm.com";
 
 pub struct GetSongBpmClient {
-    http: reqwest::Client,
     api_key: Option<String>,
+    flaresolverr: Option<Arc<FlareSolverrClient>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -17,6 +21,10 @@ struct SearchResponse {
 #[serde(untagged)]
 enum SearchPayload {
     Hits(Vec<SearchHit>),
+    Error {
+        #[allow(dead_code)]
+        error: String,
+    },
     #[default]
     Empty,
 }
@@ -28,37 +36,53 @@ struct SearchHit {
 }
 
 impl GetSongBpmClient {
-    pub fn new(http: reqwest::Client, api_key: Option<String>) -> Self {
-        Self { http, api_key }
+    pub fn new(
+        api_key: Option<String>,
+        flaresolverr: Option<Arc<FlareSolverrClient>>,
+    ) -> Self {
+        Self {
+            api_key,
+            flaresolverr,
+        }
     }
 
-    /// Look up tempo by artist + title. Returns None if no key is configured
-    /// or no result is found. Errors from the upstream are swallowed and
-    /// reported as None so the wider track lookup still succeeds.
+    /// Look up tempo by artist + title. Returns None if no key is configured,
+    /// no result is found, or an upstream error occurs (errors are logged but
+    /// swallowed so a single missing BPM doesn't break the wider track lookup).
     pub async fn lookup(&self, artist: &str, title: &str) -> Option<f64> {
         let key = self.api_key.as_ref()?;
+        let fs = self.flaresolverr.as_ref()?;
+
         let lookup = format!("song:{} artist:{}", title, artist);
-        let resp = self
-            .http
-            .get(format!("{API_BASE}/search/"))
-            .query(&[
-                ("api_key", key.as_str()),
-                ("type", "both"),
-                ("lookup", lookup.as_str()),
-            ])
-            .send()
-            .await
-            .ok()?;
+        let url = format!(
+            "{API_BASE}/search/?api_key={}&type=both&lookup={}",
+            key,
+            urlenc(&lookup),
+        );
 
-        if !resp.status().is_success() {
-            tracing::warn!(status = %resp.status(), "getsongbpm search failed");
-            return None;
-        }
+        let body = match fs.get(&url).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(error = %e, "getsongbpm via flaresolverr failed");
+                return None;
+            }
+        };
 
-        let parsed: SearchResponse = resp.json().await.ok()?;
+        let parsed: SearchResponse = match serde_json::from_str(&body) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    snippet = %body.chars().take(200).collect::<String>(),
+                    "getsongbpm parse failed"
+                );
+                return None;
+            }
+        };
+
         let hits = match parsed.search {
             SearchPayload::Hits(h) => h,
-            SearchPayload::Empty => return None,
+            SearchPayload::Error { .. } | SearchPayload::Empty => return None,
         };
         for hit in hits {
             if let Some(t) = hit.tempo {
@@ -77,4 +101,8 @@ fn parse_tempo(v: &serde_json::Value) -> Option<f64> {
         serde_json::Value::String(s) => s.trim().parse::<f64>().ok(),
         _ => None,
     }
+}
+
+fn urlenc(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
