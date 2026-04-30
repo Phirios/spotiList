@@ -1,0 +1,22 @@
+# Rust
+backend/target/
+backend/**/*.rs.bk
+
+# Env files
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Node / Next
+web/node_modules/
+web/.next/
+web/out/
+web/.vercel/
+web/next-env.d.ts
+web/.turbo/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
