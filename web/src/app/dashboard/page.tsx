@@ -83,6 +83,10 @@ export default function Dashboard() {
   const [generated, setGenerated] = useState<GeneratedPlaylist | null>(null);
   const [generateError, setGenerateError] = useState<string | null>(null);
 
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<{ url: string; name: string } | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const [expanded, setExpanded] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, TrackInfo>>({});
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
@@ -140,6 +144,8 @@ export default function Dashboard() {
     setGenerating(true);
     setGenerateError(null);
     setGenerated(null);
+    setSaved(null);
+    setSaveError(null);
     try {
       const r = await fetch("/api/playlists/generate", {
         method: "POST",
@@ -156,6 +162,40 @@ export default function Dashboard() {
       setGenerateError(String(err));
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!generated || generated.items.length === 0) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaved(null);
+    try {
+      const name =
+        generated.vibe.length > 60
+          ? generated.vibe.slice(0, 57) + "…"
+          : generated.vibe;
+      const r = await fetch("/api/playlists/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name,
+          vibe: generated.vibe,
+          track_ids: generated.items.map((t) => t.id),
+          public: false,
+        }),
+      });
+      if (!r.ok) {
+        const text = await r.text();
+        throw new Error(`${r.status}: ${text}`);
+      }
+      const data = (await r.json()) as { url: string; name: string };
+      setSaved({ url: data.url, name: data.name });
+    } catch (err) {
+      setSaveError(String(err));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -234,11 +274,35 @@ export default function Dashboard() {
           </form>
           {generateError && <p className="text-red-400 text-sm">{generateError}</p>}
           {generated && (
-            <div className="flex flex-col gap-2">
-              <p className="text-zinc-500 text-xs">
-                {generated.items.length} of {generated.considered} liked songs ·{" "}
-                model: {generated.model.split("/").pop()}
-              </p>
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <p className="text-zinc-500 text-xs">
+                  {generated.items.length} of {generated.considered} liked songs ·{" "}
+                  model: {generated.model.split("/").pop()}
+                </p>
+                <div className="flex items-center gap-3">
+                  {saved ? (
+                    <a
+                      href={saved.url}
+                      target="_blank"
+                      rel="noopener"
+                      className="rounded-full bg-emerald-500 px-4 py-1.5 text-xs font-semibold text-black hover:bg-emerald-400"
+                    >
+                      Open &ldquo;{saved.name}&rdquo; on Spotify ↗
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleSave}
+                      disabled={saving || generated.items.length === 0}
+                      className="rounded-full border border-emerald-500 text-emerald-400 px-4 py-1.5 text-xs font-semibold hover:bg-emerald-500/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {saving ? "Saving…" : "Save to Spotify"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {saveError && <p className="text-red-400 text-xs">{saveError}</p>}
               <TrackList
                 rows={generatedRows}
                 expanded={expanded}
