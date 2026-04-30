@@ -1,128 +1,78 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
-type Me = {
-  id: string;
-  spotify_id: string;
-  display_name: string | null;
-  email: string | null;
-};
+import { LeftColumn } from "./components/LeftColumn";
+import { LibrarySection } from "./components/LibrarySection";
+import { PlaylistPanel } from "./components/PlaylistPanel";
+import { SmartPlaylists } from "./components/SmartPlaylists";
+import { TrackPanel } from "./components/TrackPanel";
+import {
+  DUMMY,
+  DUMMY_TRACKS,
+  dummyAutos,
+  dummyImage,
+  dummyLibraryPage,
+  dummyPlaylistFull,
+  dummySimilar,
+  dummyTrackInfo,
+} from "./dummy";
+import type {
+  AutoPlaylistFull,
+  AutoSummary,
+  GeneratedPlaylist,
+  LibraryResponse,
+  Me,
+  Row,
+  SimilarTrack,
+  SyncStatus,
+  TrackInfo,
+} from "./types";
 
-type LibraryItem = {
-  id: string;
-  name: string;
-  artists: string[];
-  album: string;
-  image_url: string | null;
-  added_at: string | null;
-};
+export default function DashboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-black font-sans text-zinc-200 flex items-center justify-center">
+          <span className="text-zinc-500 text-sm">Loading…</span>
+        </div>
+      }
+    >
+      <Dashboard />
+    </Suspense>
+  );
+}
 
-type LibraryResponse = {
-  items: LibraryItem[];
-  total: number;
-  limit: number;
-  offset: number;
-  q: string | null;
-};
+function Dashboard() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const selectedTrack = searchParams.get("track");
+  const selectedPlaylist = searchParams.get("playlist");
 
-type SimilarTrack = {
-  id: string;
-  name: string;
-  artists: string[];
-  album: string;
-  image_url: string | null;
-  score: number;
-};
+  // Update one or more URL search params, removing keys explicitly set to null.
+  const setParams = useCallback(
+    (updates: Record<string, string | null>) => {
+      const params = new URLSearchParams(searchParams.toString());
+      for (const [k, v] of Object.entries(updates)) {
+        if (v === null) params.delete(k);
+        else params.set(k, v);
+      }
+      const qs = params.toString();
+      router.push(qs ? `${pathname}?${qs}` : pathname);
+    },
+    [router, pathname, searchParams],
+  );
 
-type RankedTrack = {
-  id: string;
-  name: string;
-  artists: string[];
-  album: string;
-  image_url: string | null;
-  score: number;
-};
-
-type GeneratedPlaylist = {
-  vibe: string;
-  model: string;
-  considered: number;
-  items: RankedTrack[];
-};
-
-type TrackInfo = {
-  id: string;
-  name: string;
-  artists: { id: string; name: string }[];
-  album: { id: string; name: string; release_date: string | null; image_url: string | null };
-  duration_ms: number;
-  explicit: boolean;
-  popularity: number | null;
-  isrc: string | null;
-  spotify_url: string | null;
-  genres: string[];
-  bpm: { tempo: number; source: string } | null;
-  lyrics: {
-    plain: string | null;
-    synced: string | null;
-    instrumental: boolean;
-    source: string;
-  } | null;
-};
-
-type Row = {
-  id: string;
-  name: string;
-  artistsLine: string;
-  album: string;
-  image: string | null;
-  trailing?: string;
-};
-
-type AutoSummary = {
-  id: string;
-  name: string;
-  description: string | null;
-  track_count: number;
-  spotify_playlist_id: string | null;
-  created_at: string;
-  sample: TrackOut[];
-};
-
-type TrackOut = {
-  id: string;
-  name: string;
-  artists: string[];
-  album: string;
-  image_url: string | null;
-};
-
-type SyncStatus = {
-  status: "idle" | "running" | "done" | "failed";
-  stage: "starting" | "fetching_library" | "fetching_tags" | "embedding" | null;
-  progress: number;
-  total: number;
-  started_at: string | null;
-  updated_at: string;
-  finished_at: string | null;
-  error: string | null;
-};
-
-const STAGE_LABEL: Record<NonNullable<SyncStatus["stage"]>, string> = {
-  starting: "Starting up",
-  fetching_library: "Fetching your liked songs",
-  fetching_tags: "Looking up genres",
-  embedding: "Computing embeddings",
-};
-
-export default function Dashboard() {
   const [me, setMe] = useState<Me | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
   const [library, setLibrary] = useState<LibraryResponse | null>(null);
   const [libraryQ, setLibraryQ] = useState("");
   const [libraryLoading, setLibraryLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [libraryMoreLoading, setLibraryMoreLoading] = useState(false);
 
   const [vibe, setVibe] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -130,7 +80,9 @@ export default function Dashboard() {
   const [generateError, setGenerateError] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState<{ url: string; name: string } | null>(null);
+  const [saved, setSaved] = useState<{ url: string; name: string } | null>(
+    null,
+  );
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const [autos, setAutos] = useState<AutoSummary[] | null>(null);
@@ -141,18 +93,46 @@ export default function Dashboard() {
   const [autoSaved, setAutoSaved] = useState<Record<string, string>>({});
 
   const [sync, setSync] = useState<SyncStatus | null>(null);
-
   const isSyncing = sync?.status === "running";
   const isSyncDone = sync?.status === "done";
 
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, TrackInfo>>({});
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [similar, setSimilar] = useState<Record<string, SimilarTrack[]>>({});
   const [similarLoading, setSimilarLoading] = useState<string | null>(null);
 
+  const [playlistFull, setPlaylistFull] = useState<
+    Record<string, AutoPlaylistFull>
+  >({});
+  const [playlistLoading, setPlaylistLoading] = useState<string | null>(null);
+  const [playlistError, setPlaylistError] = useState<string | null>(null);
+
+  // Initial load
   useEffect(() => {
+    if (DUMMY) {
+      setMe({
+        id: "u1",
+        spotify_id: "phirios",
+        display_name: "Phirios",
+        email: "kirazh27@gmail.com",
+      });
+      setLibrary(dummyLibraryPage(0, 30, null));
+      setAutos(dummyAutos());
+      setSync({
+        status: "done",
+        stage: null,
+        progress: 0,
+        total: 0,
+        started_at: null,
+        updated_at: new Date().toISOString(),
+        finished_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        error: null,
+      });
+      setLoading(false);
+      setAutosLoading(false);
+      return;
+    }
     (async () => {
       try {
         const meRes = await fetch("/api/auth/me", { credentials: "include" });
@@ -163,7 +143,9 @@ export default function Dashboard() {
         if (!meRes.ok) throw new Error(`me ${meRes.status}`);
         setMe(await meRes.json());
 
-        const libRes = await fetch("/api/me/library?limit=30", { credentials: "include" });
+        const libRes = await fetch("/api/me/library?limit=30", {
+          credentials: "include",
+        });
         if (!libRes.ok) throw new Error(`library ${libRes.status}`);
         setLibrary(await libRes.json());
       } catch (e) {
@@ -173,28 +155,27 @@ export default function Dashboard() {
       }
 
       try {
-        const r = await fetch("/api/auto-playlists", { credentials: "include" });
+        const r = await fetch("/api/auto-playlists", {
+          credentials: "include",
+        });
         if (r.ok) setAutos(await r.json());
       } catch {
-        // ignore — will surface on regenerate
+        // ignore — surface on regenerate
       } finally {
         setAutosLoading(false);
       }
     })();
   }, []);
 
-  // Poll sync status. While running, poll every 1.5s; otherwise every 30s.
+  // Sync polling. While running, poll fast; otherwise slow.
   useEffect(() => {
+    if (DUMMY) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-
     const poll = async () => {
       try {
         const r = await fetch("/api/library/sync", { credentials: "include" });
-        if (!cancelled && r.ok) {
-          const data = (await r.json()) as SyncStatus;
-          setSync(data);
-        }
+        if (!cancelled && r.ok) setSync((await r.json()) as SyncStatus);
       } catch {
         // ignore
       }
@@ -208,10 +189,188 @@ export default function Dashboard() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-    // We intentionally re-run when status flips from running ↔ idle so the
-    // cadence updates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sync?.status]);
+
+  // Auto-trigger sync if status is idle (existing users / first load).
+  useEffect(() => {
+    if (sync?.status === "idle") startSync(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sync?.status]);
+
+  // Debounced library search.
+  useEffect(() => {
+    if (loading) return;
+    if (DUMMY) {
+      const q = libraryQ.trim() || null;
+      setLibrary(dummyLibraryPage(0, 30, q));
+      return;
+    }
+    const t = setTimeout(async () => {
+      setLibraryLoading(true);
+      try {
+        const url = libraryQ.trim()
+          ? `/api/me/library?limit=50&q=${encodeURIComponent(libraryQ.trim())}`
+          : `/api/me/library?limit=30`;
+        const r = await fetch(url, { credentials: "include" });
+        if (r.ok) setLibrary(await r.json());
+      } finally {
+        setLibraryLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [libraryQ, loading]);
+
+  // Fetch track detail + similar when URL changes.
+  useEffect(() => {
+    if (!selectedTrack) return;
+    setDetailError(null);
+
+    if (DUMMY) {
+      setDetails((prev) =>
+        prev[selectedTrack]
+          ? prev
+          : { ...prev, [selectedTrack]: dummyTrackInfo(selectedTrack) },
+      );
+      setSimilar((prev) =>
+        prev[selectedTrack]
+          ? prev
+          : { ...prev, [selectedTrack]: dummySimilar(selectedTrack) },
+      );
+      return;
+    }
+
+    let cancelled = false;
+    if (!details[selectedTrack]) {
+      setDetailLoading(selectedTrack);
+      (async () => {
+        try {
+          const r = await fetch(`/api/tracks/${selectedTrack}`);
+          if (!r.ok) throw new Error(`${r.status}`);
+          const info = (await r.json()) as TrackInfo;
+          if (!cancelled) {
+            setDetails((prev) => ({ ...prev, [selectedTrack]: info }));
+          }
+        } catch (e) {
+          if (!cancelled) setDetailError(String(e));
+        } finally {
+          if (!cancelled) setDetailLoading(null);
+        }
+      })();
+    }
+    if (!similar[selectedTrack]) {
+      setSimilarLoading(selectedTrack);
+      (async () => {
+        try {
+          const r = await fetch(
+            `/api/tracks/${selectedTrack}/similar?limit=8`,
+            { credentials: "include" },
+          );
+          if (r.ok) {
+            const list = (await r.json()) as SimilarTrack[];
+            if (!cancelled) {
+              setSimilar((prev) => ({ ...prev, [selectedTrack]: list }));
+            }
+          }
+        } finally {
+          if (!cancelled) setSimilarLoading(null);
+        }
+      })();
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTrack]);
+
+  // Fetch playlist detail when ?playlist changes (cached per id).
+  useEffect(() => {
+    if (!selectedPlaylist) return;
+    setPlaylistError(null);
+    if (DUMMY) {
+      setPlaylistFull((prev) =>
+        prev[selectedPlaylist]
+          ? prev
+          : { ...prev, [selectedPlaylist]: dummyPlaylistFull(selectedPlaylist) },
+      );
+      return;
+    }
+    if (playlistFull[selectedPlaylist]) return;
+    let cancelled = false;
+    setPlaylistLoading(selectedPlaylist);
+    (async () => {
+      try {
+        const r = await fetch(`/api/auto-playlists/${selectedPlaylist}`, {
+          credentials: "include",
+        });
+        if (!r.ok) throw new Error(`${r.status}`);
+        const data = (await r.json()) as AutoPlaylistFull;
+        if (!cancelled) {
+          setPlaylistFull((prev) => ({ ...prev, [selectedPlaylist]: data }));
+        }
+      } catch (e) {
+        if (!cancelled) setPlaylistError(String(e));
+      } finally {
+        if (!cancelled) setPlaylistLoading(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPlaylist]);
+
+  const selectTrack = useCallback(
+    (id: string) => setParams({ track: id }),
+    [setParams],
+  );
+  const closeTrack = useCallback(() => setParams({ track: null }), [setParams]);
+  const selectPlaylist = useCallback(
+    (id: string) => setParams({ playlist: id, track: null }),
+    [setParams],
+  );
+  const closePlaylist = useCallback(
+    () => setParams({ playlist: null }),
+    [setParams],
+  );
+
+  const loadMoreLibrary = useCallback(async () => {
+    if (libraryMoreLoading || !library) return;
+    if (library.items.length >= library.total) return;
+    setLibraryMoreLoading(true);
+    try {
+      if (DUMMY) {
+        await new Promise((r) => setTimeout(r, 250));
+        const next = dummyLibraryPage(library.items.length, 30, library.q);
+        setLibrary({ ...next, items: [...library.items, ...next.items] });
+        return;
+      }
+      const params = new URLSearchParams({
+        limit: "50",
+        offset: String(library.items.length),
+      });
+      if (library.q) params.set("q", library.q);
+      const r = await fetch(`/api/me/library?${params}`, {
+        credentials: "include",
+      });
+      if (r.ok) {
+        const next = (await r.json()) as LibraryResponse;
+        setLibrary({ ...next, items: [...library.items, ...next.items] });
+      }
+    } finally {
+      setLibraryMoreLoading(false);
+    }
+  }, [library, libraryMoreLoading]);
+
+  const onLibraryScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      const el = e.currentTarget;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) {
+        loadMoreLibrary();
+      }
+    },
+    [loadMoreLibrary],
+  );
 
   async function startSync(force = false) {
     try {
@@ -227,122 +386,6 @@ export default function Dashboard() {
     }
   }
 
-  // Auto-trigger sync on first poll if the server reports idle (existing
-  // users who logged in before sync existed, or anyone whose login didn't
-  // race with the auto-spawn).
-  useEffect(() => {
-    if (sync?.status === "idle") {
-      startSync(false);
-    }
-  }, [sync?.status]);
-
-  // Debounced library search — re-query 250ms after the user stops typing.
-  useEffect(() => {
-    if (loading) return; // initial fetch handled in mount effect
-    const t = setTimeout(async () => {
-      setLibraryLoading(true);
-      try {
-        const url = libraryQ.trim()
-          ? `/api/me/library?limit=50&q=${encodeURIComponent(libraryQ.trim())}`
-          : `/api/me/library?limit=30`;
-        const r = await fetch(url, { credentials: "include" });
-        if (r.ok) setLibrary(await r.json());
-      } catch {
-        // ignore — keep showing previous results
-      } finally {
-        setLibraryLoading(false);
-      }
-    }, 250);
-    return () => clearTimeout(t);
-  }, [libraryQ, loading]);
-
-  async function handleRegenerate() {
-    setRegenerating(true);
-    setAutoError(null);
-    try {
-      const r = await fetch("/api/auto-playlists/regenerate", {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!r.ok) {
-        const text = await r.text();
-        throw new Error(`${r.status}: ${text}`);
-      }
-      const data = (await r.json()) as { playlists: AutoSummary[] };
-      setAutos(data.playlists);
-      setAutoSaved({});
-    } catch (e) {
-      setAutoError(String(e));
-    } finally {
-      setRegenerating(false);
-    }
-  }
-
-  async function handleSaveAuto(p: AutoSummary) {
-    setAutoSaving(p.id);
-    try {
-      const r = await fetch(`/api/auto-playlists/${p.id}/save`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!r.ok) {
-        const text = await r.text();
-        throw new Error(`${r.status}: ${text}`);
-      }
-      const data = (await r.json()) as { url: string };
-      setAutoSaved((prev) => ({ ...prev, [p.id]: data.url }));
-    } catch (e) {
-      setAutoError(String(e));
-    } finally {
-      setAutoSaving(null);
-    }
-  }
-
-  const toggleTrack = useCallback(
-    async (id: string) => {
-      if (expanded === id) {
-        setExpanded(null);
-        return;
-      }
-      setExpanded(id);
-      setDetailError(null);
-
-      // Fetch detail (cache hit for previously opened tracks).
-      if (!details[id]) {
-        setDetailLoading(id);
-        try {
-          const r = await fetch(`/api/tracks/${id}`);
-          if (!r.ok) throw new Error(`${r.status}`);
-          const info = (await r.json()) as TrackInfo;
-          setDetails((prev) => ({ ...prev, [id]: info }));
-        } catch (e) {
-          setDetailError(String(e));
-        } finally {
-          setDetailLoading(null);
-        }
-      }
-
-      // Fetch similar tracks (also memoized).
-      if (!similar[id]) {
-        setSimilarLoading(id);
-        try {
-          const r = await fetch(`/api/tracks/${id}/similar?limit=8`, {
-            credentials: "include",
-          });
-          if (r.ok) {
-            const list = (await r.json()) as SimilarTrack[];
-            setSimilar((prev) => ({ ...prev, [id]: list }));
-          }
-        } catch {
-          // ignore — similar is best-effort
-        } finally {
-          setSimilarLoading(null);
-        }
-      }
-    },
-    [expanded, details, similar],
-  );
-
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
     if (!vibe.trim()) return;
@@ -351,6 +394,24 @@ export default function Dashboard() {
     setGenerated(null);
     setSaved(null);
     setSaveError(null);
+    if (DUMMY) {
+      await new Promise((r) => setTimeout(r, 600));
+      setGenerated({
+        vibe,
+        model: "sentence-transformers/all-MiniLM-L6-v2#v3-cache",
+        considered: 2873,
+        items: DUMMY_TRACKS.slice(0, 12).map((t, i) => ({
+          id: t.id,
+          name: t.name,
+          artists: t.artists,
+          album: t.album,
+          image_url: dummyImage(t.id),
+          score: 0.95 - i * 0.04,
+        })),
+      });
+      setGenerating(false);
+      return;
+    }
     try {
       const r = await fetch("/api/playlists/generate", {
         method: "POST",
@@ -375,6 +436,18 @@ export default function Dashboard() {
     setSaving(true);
     setSaveError(null);
     setSaved(null);
+    if (DUMMY) {
+      await new Promise((r) => setTimeout(r, 400));
+      setSaved({
+        url: "https://open.spotify.com/playlist/dummyid",
+        name:
+          generated.vibe.length > 60
+            ? generated.vibe.slice(0, 57) + "…"
+            : generated.vibe,
+      });
+      setSaving(false);
+      return;
+    }
     try {
       const name =
         generated.vibe.length > 60
@@ -404,8 +477,69 @@ export default function Dashboard() {
     }
   }
 
+  async function handleRegenerate() {
+    setRegenerating(true);
+    setAutoError(null);
+    if (DUMMY) {
+      await new Promise((r) => setTimeout(r, 800));
+      setAutos(dummyAutos());
+      setAutoSaved({});
+      setRegenerating(false);
+      return;
+    }
+    try {
+      const r = await fetch("/api/auto-playlists/regenerate", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!r.ok) {
+        const text = await r.text();
+        throw new Error(`${r.status}: ${text}`);
+      }
+      const data = (await r.json()) as { playlists: AutoSummary[] };
+      setAutos(data.playlists);
+      setAutoSaved({});
+    } catch (e) {
+      setAutoError(String(e));
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  async function handleSaveAuto(p: AutoSummary) {
+    setAutoSaving(p.id);
+    if (DUMMY) {
+      await new Promise((r) => setTimeout(r, 400));
+      setAutoSaved((prev) => ({
+        ...prev,
+        [p.id]: "https://open.spotify.com/playlist/dummyid",
+      }));
+      setAutoSaving(null);
+      return;
+    }
+    try {
+      const r = await fetch(`/api/auto-playlists/${p.id}/save`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!r.ok) {
+        const text = await r.text();
+        throw new Error(`${r.status}: ${text}`);
+      }
+      const data = (await r.json()) as { url: string };
+      setAutoSaved((prev) => ({ ...prev, [p.id]: data.url }));
+    } catch (e) {
+      setAutoError(String(e));
+    } finally {
+      setAutoSaving(null);
+    }
+  }
+
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    });
     window.location.href = "/";
   }
 
@@ -421,580 +555,85 @@ export default function Dashboard() {
         : undefined,
     })) ?? [];
 
-  const generatedRows: Row[] =
-    generated?.items.map((t) => ({
-      id: t.id,
-      name: t.name,
-      artistsLine: t.artists.join(", "),
-      album: t.album,
-      image: t.image_url,
-      trailing: t.score.toFixed(3),
-    })) ?? [];
-
   return (
-    <div className="flex flex-1 flex-col bg-black font-sans text-zinc-200">
-      <main className="flex flex-1 flex-col gap-12 px-6 py-20 sm:px-12 lg:px-20 max-w-5xl mx-auto w-full">
-        <header className="flex flex-col gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/logo.png"
-            alt="spoti"
-            className="h-12 w-12 rounded-xl mb-2"
-          />
-          <span className="text-sm uppercase tracking-[0.3em] text-emerald-400">
-            dashboard
-          </span>
-          <h1 className="text-3xl sm:text-5xl font-semibold tracking-tight text-white">
-            {loading
-              ? "Loading…"
-              : me
-                ? `Hey ${me.display_name ?? me.spotify_id}`
-                : "Not logged in"}
-          </h1>
-          {error && <p className="text-red-400 text-sm">{error}</p>}
-        </header>
-
-        <SyncCard sync={sync} onResync={() => startSync(true)} />
-
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-5">
-          <div>
-            <h2 className="text-xl font-semibold text-white mb-1">
-              Generate a vibe playlist
-            </h2>
-            <p className="text-zinc-400 text-sm">
-              Describe a mood. We&rsquo;ll search your liked songs.
-            </p>
-          </div>
-          <form onSubmit={handleGenerate} className="flex flex-col sm:flex-row gap-3">
-            <input
-              type="text"
-              value={vibe}
-              onChange={(e) => setVibe(e.target.value)}
-              placeholder="late-night drive after a long week"
-              className="flex-1 rounded-full bg-black border border-zinc-800 px-5 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500"
-            />
-            <button
-              type="submit"
-              disabled={generating || !vibe.trim() || isSyncing || !isSyncDone}
-              className="rounded-full bg-emerald-500 px-6 py-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {generating ? "Generating…" : "Generate"}
-            </button>
-          </form>
-          {generateError && <p className="text-red-400 text-sm">{generateError}</p>}
-          {generated && (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <p className="text-zinc-500 text-xs">
-                  {generated.items.length} of {generated.considered} liked songs ·{" "}
-                  model: {generated.model.split("/").pop()}
-                </p>
-                <div className="flex items-center gap-3">
-                  {saved ? (
-                    <a
-                      href={saved.url}
-                      target="_blank"
-                      rel="noopener"
-                      className="rounded-full bg-emerald-500 px-4 py-1.5 text-xs font-semibold text-black hover:bg-emerald-400"
-                    >
-                      Open &ldquo;{saved.name}&rdquo; on Spotify ↗
-                    </a>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleSave}
-                      disabled={saving || generated.items.length === 0}
-                      className="rounded-full border border-emerald-500 text-emerald-400 px-4 py-1.5 text-xs font-semibold hover:bg-emerald-500/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {saving ? "Saving…" : "Save to Spotify"}
-                    </button>
-                  )}
-                </div>
-              </div>
-              {saveError && <p className="text-red-400 text-xs">{saveError}</p>}
-              <TrackList
-                rows={generatedRows}
-                expanded={expanded}
-                details={details}
-                detailLoading={detailLoading}
-                detailError={detailError}
-                similar={similar}
-                similarLoading={similarLoading}
-                onToggle={toggleTrack}
-              />
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-5">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <h2 className="text-xl font-semibold text-white mb-1">
-                Smart playlists
-              </h2>
-              <p className="text-zinc-400 text-sm">
-                Auto-clustered groups across your library by metadata
-                correlation.
-              </p>
-            </div>
-            <button
-              onClick={handleRegenerate}
-              disabled={regenerating || isSyncing || !isSyncDone}
-              className="rounded-full border border-emerald-500 text-emerald-400 px-4 py-1.5 text-xs font-semibold hover:bg-emerald-500/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-            >
-              {regenerating
-                ? "Regenerating…"
-                : autos && autos.length > 0
-                  ? "Regenerate"
-                  : "Generate"}
-            </button>
-          </div>
-          {autoError && <p className="text-red-400 text-xs">{autoError}</p>}
-          {autosLoading && !autos ? (
-            <p className="text-zinc-500 text-sm">Loading…</p>
-          ) : !autos || autos.length === 0 ? (
-            <p className="text-zinc-500 text-sm">
-              No smart playlists yet. Click Generate — first run takes longer
-              while embeddings are computed.
-            </p>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
-              {autos.map((p) => (
-                <AutoCard
-                  key={p.id}
-                  p={p}
-                  saving={autoSaving === p.id}
-                  savedUrl={autoSaved[p.id] ?? null}
-                  onSave={() => handleSaveAuto(p)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-5">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <h2 className="text-xl font-semibold text-white mb-1">
-                Your library
-              </h2>
-              <p className="text-zinc-400 text-sm">
-                {library
-                  ? `${library.total.toLocaleString()} ${library.q ? "matches" : "liked songs"} · showing ${library.items.length}`
-                  : "Loading…"}
-              </p>
-            </div>
-            <input
-              type="text"
-              value={libraryQ}
-              onChange={(e) => setLibraryQ(e.target.value)}
-              placeholder="Search by name, artist, album…"
-              className="rounded-full bg-black border border-zinc-800 px-4 py-2 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500 w-full sm:w-72"
-            />
-          </div>
-          {libraryLoading && (
-            <p className="text-zinc-500 text-xs">Searching…</p>
-          )}
-          {library && library.items.length === 0 && !libraryLoading && (
-            <p className="text-zinc-500 text-sm">No matches.</p>
-          )}
-          <TrackList
-            rows={libraryRows}
-            expanded={expanded}
-            details={details}
-            detailLoading={detailLoading}
-            detailError={detailError}
-            similar={similar}
-            similarLoading={similarLoading}
-            onToggle={toggleTrack}
-          />
-        </section>
-
-        {me && (
-          <section className="flex gap-3">
-            <button
-              onClick={logout}
-              className="rounded-full border border-zinc-700 px-5 py-2 text-sm hover:bg-zinc-900"
-            >
-              Log out
-            </button>
-          </section>
-        )}
-      </main>
-    </div>
-  );
-}
-
-function TrackList({
-  rows,
-  expanded,
-  details,
-  detailLoading,
-  detailError,
-  similar,
-  similarLoading,
-  onToggle,
-}: {
-  rows: Row[];
-  expanded: string | null;
-  details: Record<string, TrackInfo>;
-  detailLoading: string | null;
-  detailError: string | null;
-  similar: Record<string, SimilarTrack[]>;
-  similarLoading: string | null;
-  onToggle: (id: string) => void;
-}) {
-  return (
-    <ul className="divide-y divide-zinc-900">
-      {rows.map((row) => {
-        const isOpen = expanded === row.id;
-        const info = details[row.id];
-        const sim = similar[row.id];
-        return (
-          <li key={row.id} className="flex flex-col">
-            <button
-              type="button"
-              onClick={() => onToggle(row.id)}
-              className="flex items-center gap-4 py-3 text-left w-full hover:bg-zinc-900/50 -mx-3 px-3 rounded-md transition-colors"
-            >
-              {row.image && (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img
-                  src={row.image}
-                  alt=""
-                  className="h-12 w-12 rounded object-cover flex-shrink-0"
-                />
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="text-white truncate">{row.name}</div>
-                <div className="text-sm text-zinc-400 truncate">
-                  {row.artistsLine} · {row.album}
-                </div>
-              </div>
-              {row.trailing && (
-                <div className="text-xs text-zinc-500 hidden sm:block tabular-nums flex-shrink-0">
-                  {row.trailing}
-                </div>
-              )}
-            </button>
-            {isOpen && (
-              <TrackDetail
-                loading={detailLoading === row.id}
-                error={detailError}
-                info={info}
-                similar={sim}
-                similarLoading={similarLoading === row.id}
-                onPick={onToggle}
-              />
-            )}
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function TrackDetail({
-  loading,
-  error,
-  info,
-  similar,
-  similarLoading,
-  onPick,
-}: {
-  loading: boolean;
-  error: string | null;
-  info: TrackInfo | undefined;
-  similar: SimilarTrack[] | undefined;
-  similarLoading: boolean;
-  onPick: (id: string) => void;
-}) {
-  return (
-    <div className="ml-16 mr-3 my-3 rounded-xl border border-zinc-800 bg-black/40 p-5 text-sm">
-      {loading && <p className="text-zinc-500">Loading metadata…</p>}
-      {error && !loading && <p className="text-red-400">{error}</p>}
-      {info && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-          <Field label="BPM">
-            {info.bpm ? (
-              <span className="text-white tabular-nums">
-                {info.bpm.tempo.toFixed(1)}{" "}
-                <span className="text-zinc-500 text-xs">
-                  ({info.bpm.source})
-                </span>
-              </span>
-            ) : (
-              <span className="text-zinc-600">—</span>
-            )}
-          </Field>
-          <Field label="Genres">
-            {info.genres.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {info.genres.map((g) => (
-                  <span
-                    key={g}
-                    className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-300"
-                  >
-                    {g}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <span className="text-zinc-600">—</span>
-            )}
-          </Field>
-          <Field label="Popularity">
-            {info.popularity !== null ? (
-              <span className="text-white tabular-nums">{info.popularity}</span>
-            ) : (
-              <span className="text-zinc-600">—</span>
-            )}
-          </Field>
-          <div className="sm:col-span-3">
-            <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
-              Lyrics
-            </div>
-            {info.lyrics?.synced ? (
-              <pre className="whitespace-pre-wrap font-sans text-zinc-300 max-h-64 overflow-y-auto">
-                {info.lyrics.synced}
-              </pre>
-            ) : info.lyrics?.plain ? (
-              <pre className="whitespace-pre-wrap font-sans text-zinc-300 max-h-64 overflow-y-auto">
-                {info.lyrics.plain}
-              </pre>
-            ) : info.lyrics?.instrumental ? (
-              <p className="text-zinc-500">Instrumental</p>
-            ) : (
-              <p className="text-zinc-600">—</p>
-            )}
-          </div>
-          <div className="sm:col-span-3">
-            <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
-              Similar in your library
-            </div>
-            {similarLoading && !similar ? (
-              <p className="text-zinc-500 text-sm">Looking…</p>
-            ) : similar && similar.length > 0 ? (
-              <ul className="flex flex-col gap-1">
-                {similar.map((s) => (
-                  <li key={s.id}>
-                    <button
-                      type="button"
-                      onClick={() => onPick(s.id)}
-                      className="flex items-center gap-3 w-full py-1.5 px-2 -mx-2 rounded hover:bg-zinc-900/50 text-left"
-                    >
-                      {s.image_url && (
-                        /* eslint-disable-next-line @next/next/no-img-element */
-                        <img
-                          src={s.image_url}
-                          alt=""
-                          className="h-8 w-8 rounded object-cover flex-shrink-0"
-                        />
-                      )}
-                      <span className="flex-1 min-w-0 text-sm">
-                        <span className="text-white truncate block">
-                          {s.name}
-                        </span>
-                        <span className="text-zinc-500 text-xs truncate block">
-                          {s.artists.join(", ")}
-                        </span>
-                      </span>
-                      <span className="text-xs text-zinc-500 tabular-nums flex-shrink-0">
-                        {s.score.toFixed(2)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-zinc-600 text-sm">—</p>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{label}</div>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function SyncCard({
-  sync,
-  onResync,
-}: {
-  sync: SyncStatus | null;
-  onResync: () => void;
-}) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (sync?.status !== "running") return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [sync?.status]);
-
-  if (!sync) return null;
-
-  if (sync.status === "done") {
-    return (
-      <section className="rounded-2xl border border-emerald-900/50 bg-emerald-950/20 px-6 py-4 flex items-center justify-between gap-3">
-        <div className="text-sm text-emerald-300">
-          Library synced{" "}
-          {sync.finished_at && (
-            <span className="text-emerald-300/60">
-              · {new Date(sync.finished_at).toLocaleString()}
-            </span>
-          )}
-        </div>
-        <button
-          onClick={onResync}
-          className="rounded-full border border-emerald-700 text-emerald-300 px-3 py-1 text-xs hover:bg-emerald-900/30"
-        >
-          Resync
-        </button>
-      </section>
-    );
-  }
-
-  if (sync.status === "failed") {
-    return (
-      <section className="rounded-2xl border border-red-900/50 bg-red-950/20 px-6 py-4 flex items-center justify-between gap-3">
-        <div className="text-sm text-red-300">
-          Sync failed{sync.error ? `: ${sync.error}` : ""}
-        </div>
-        <button
-          onClick={onResync}
-          className="rounded-full border border-red-700 text-red-300 px-3 py-1 text-xs hover:bg-red-900/30"
-        >
-          Retry
-        </button>
-      </section>
-    );
-  }
-
-  // running or idle (idle here usually means freshly logged in, sync about to start)
-  const stage = sync.stage ?? "starting";
-  const label = STAGE_LABEL[stage] ?? "Working";
-  const total = sync.total || 0;
-  const progress = sync.progress || 0;
-  const pct =
-    total > 0 ? Math.min(100, Math.round((progress / total) * 100)) : null;
-  let etaSeconds: number | null = null;
-  if (sync.started_at && progress > 0 && total > progress) {
-    const startedMs = new Date(sync.started_at).getTime();
-    const elapsed = (now - startedMs) / 1000;
-    const rate = progress / elapsed;
-    if (rate > 0) {
-      etaSeconds = Math.max(1, Math.round((total - progress) / rate));
-    }
-  }
-
-  return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-6 flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-sm uppercase tracking-[0.2em] text-emerald-400">
-            Syncing your library
-          </div>
-          <div className="text-white text-lg mt-1">{label}</div>
-        </div>
-        {etaSeconds !== null && (
-          <div className="text-right">
-            <div className="text-xs uppercase tracking-wider text-zinc-500">
-              ETA
-            </div>
-            <div className="text-white tabular-nums">
-              {formatEta(etaSeconds)}
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="h-2 rounded-full bg-zinc-800 overflow-hidden">
-        <div
-          className="h-full bg-emerald-500 transition-[width] duration-500"
-          style={{ width: `${pct ?? 5}%` }}
+    <div className="min-h-screen bg-black font-sans text-zinc-200">
+      <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-6 py-6 grid gap-6 grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_360px] lg:h-screen lg:overflow-hidden">
+        <LeftColumn
+          me={me}
+          error={error}
+          sync={sync}
+          onResync={() => startSync(true)}
+          vibe={vibe}
+          setVibe={setVibe}
+          generating={generating}
+          generated={generated}
+          generateError={generateError}
+          saving={saving}
+          saved={saved}
+          saveError={saveError}
+          isSyncing={isSyncing}
+          isSyncDone={isSyncDone}
+          selectedTrack={selectedTrack}
+          onGenerate={handleGenerate}
+          onSave={handleSave}
+          onSelectTrack={selectTrack}
+          onLogout={logout}
         />
-      </div>
-      <div className="flex items-center justify-between text-xs text-zinc-500 tabular-nums">
-        <span>
-          {progress.toLocaleString()}
-          {total > 0 ? ` / ${total.toLocaleString()}` : ""}
-        </span>
-        {pct !== null && <span>{pct}%</span>}
-      </div>
-    </section>
-  );
-}
 
-function formatEta(sec: number): string {
-  if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return s ? `${m}m ${s}s` : `${m}m`;
-}
+        <main className="min-w-0 flex flex-col gap-5 min-h-0 lg:max-h-[calc(100vh-3rem)]">
+          {selectedTrack ? (
+            <TrackPanel
+              loading={detailLoading === selectedTrack}
+              error={detailError}
+              info={details[selectedTrack]}
+              similar={similar[selectedTrack]}
+              similarLoading={similarLoading === selectedTrack}
+              onClose={closeTrack}
+              onPick={selectTrack}
+            />
+          ) : selectedPlaylist ? (
+            <PlaylistPanel
+              loading={playlistLoading === selectedPlaylist}
+              error={playlistError}
+              playlist={playlistFull[selectedPlaylist]}
+              saving={autoSaving === selectedPlaylist}
+              savedUrl={autoSaved[selectedPlaylist] ?? null}
+              onSave={() => {
+                const summary = autos?.find((a) => a.id === selectedPlaylist);
+                if (summary) handleSaveAuto(summary);
+              }}
+              onClose={closePlaylist}
+              onPickTrack={selectTrack}
+            />
+          ) : (
+            <LibrarySection
+              library={library}
+              libraryQ={libraryQ}
+              setLibraryQ={setLibraryQ}
+              libraryLoading={libraryLoading}
+              libraryMoreLoading={libraryMoreLoading}
+              onScroll={onLibraryScroll}
+              libraryRows={libraryRows}
+              selectedTrack={selectedTrack}
+              onSelectTrack={selectTrack}
+            />
+          )}
+        </main>
 
-function AutoCard({
-  p,
-  saving,
-  savedUrl,
-  onSave,
-}: {
-  p: AutoSummary;
-  saving: boolean;
-  savedUrl: string | null;
-  onSave: () => void;
-}) {
-  return (
-    <div className="rounded-xl border border-zinc-800 bg-black/40 p-5 flex flex-col gap-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="text-white font-semibold capitalize truncate">
-            {p.name}
-          </div>
-          <div className="text-xs text-zinc-500">{p.track_count} tracks</div>
-        </div>
-        {savedUrl ? (
-          <a
-            href={savedUrl}
-            target="_blank"
-            rel="noopener"
-            className="rounded-full bg-emerald-500 px-3 py-1 text-xs font-semibold text-black hover:bg-emerald-400 flex-shrink-0"
-          >
-            Open ↗
-          </a>
-        ) : (
-          <button
-            onClick={onSave}
-            disabled={saving}
-            className="rounded-full border border-emerald-500 text-emerald-400 px-3 py-1 text-xs font-semibold hover:bg-emerald-500/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        )}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        {p.sample.map((t) => (
-          <div key={t.id} className="flex items-center gap-2 min-w-0">
-            {t.image_url && (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={t.image_url}
-                alt=""
-                className="h-6 w-6 rounded object-cover flex-shrink-0"
-              />
-            )}
-            <span className="text-zinc-300 text-xs truncate">
-              {t.name}{" "}
-              <span className="text-zinc-500">— {t.artists.join(", ")}</span>
-            </span>
-          </div>
-        ))}
+        <SmartPlaylists
+          autos={autos}
+          autosLoading={autosLoading}
+          regenerating={regenerating}
+          autoError={autoError}
+          autoSaving={autoSaving}
+          autoSaved={autoSaved}
+          isSyncing={isSyncing}
+          isSyncDone={isSyncDone}
+          onRegenerate={handleRegenerate}
+          onOpen={selectPlaylist}
+          onSave={handleSaveAuto}
+          onPickTrack={selectTrack}
+        />
       </div>
     </div>
   );
