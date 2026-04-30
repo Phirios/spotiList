@@ -16,6 +16,13 @@ export const metadata: Metadata = {
   title: "spoti — vibe-based playlist generator",
   description:
     "An NLP project that turns your Spotify liked songs into playlists matching a vibe you describe in plain language.",
+  openGraph: {
+    title: "spoti — vibe-based playlist generator",
+    description:
+      "Turn a mood prompt into a playlist drawn from your liked songs.",
+    images: ["/logo.png"],
+    type: "website",
+  },
 };
 
 export default function RootLayout({

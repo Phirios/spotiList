@@ -188,6 +188,12 @@ export default function Dashboard() {
     <div className="flex flex-1 flex-col bg-black font-sans text-zinc-200">
       <main className="flex flex-1 flex-col gap-12 px-6 py-20 sm:px-12 lg:px-20 max-w-5xl mx-auto w-full">
         <header className="flex flex-col gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo.png"
+            alt="spoti"
+            className="h-12 w-12 rounded-xl mb-2"
+          />
           <span className="text-sm uppercase tracking-[0.3em] text-emerald-400">
             dashboard
           </span>

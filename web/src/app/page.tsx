@@ -3,6 +3,12 @@ export default function Home() {
     <div className="flex flex-1 flex-col bg-black font-sans text-zinc-200">
       <main className="flex flex-1 flex-col gap-20 px-6 py-20 sm:px-12 lg:px-20 max-w-5xl mx-auto w-full">
         <header className="flex flex-col gap-6">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo.png"
+            alt="spoti"
+            className="h-14 w-14 rounded-xl"
+          />
           <span className="text-sm uppercase tracking-[0.3em] text-emerald-400">
             spoti.phirios.com
           </span>
