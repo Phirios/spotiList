@@ -55,7 +55,7 @@ async fn get_track(
         if q.no_bpm {
             None
         } else {
-            state.bpm.lookup(&primary_artist, &title).await
+            state.bpm.lookup(&id, &primary_artist, &title).await
         }
     };
     let lyrics_fut = async {
