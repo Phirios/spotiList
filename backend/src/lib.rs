@@ -6,6 +6,7 @@ pub mod embeddings;
 pub mod error;
 pub mod lastfm;
 pub mod library;
+pub mod sync;
 pub mod lyrics;
 pub mod me;
 pub mod model;

@@ -16,6 +16,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::me::router())
         .merge(crate::playlists::router())
         .merge(crate::auto::router())
+        .merge(crate::sync::router())
         .with_state(state)
 }
 

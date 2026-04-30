@@ -111,6 +111,10 @@ async fn callback(
     .await
     .map_err(|e| AppError::Internal(e.into()))?;
 
+    // Kick off a library sync in the background so the user lands on a
+    // dashboard that's already populating instead of an empty one.
+    crate::sync::spawn_sync(state.clone(), saved.id);
+
     let session_cookie = Cookie::build((SESSION_COOKIE, saved.id.to_string()))
         .http_only(true)
         .secure(state.cookie_secure)

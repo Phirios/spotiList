@@ -90,6 +90,24 @@ type TrackOut = {
   image_url: string | null;
 };
 
+type SyncStatus = {
+  status: "idle" | "running" | "done" | "failed";
+  stage: "starting" | "fetching_library" | "fetching_tags" | "embedding" | null;
+  progress: number;
+  total: number;
+  started_at: string | null;
+  updated_at: string;
+  finished_at: string | null;
+  error: string | null;
+};
+
+const STAGE_LABEL: Record<NonNullable<SyncStatus["stage"]>, string> = {
+  starting: "Starting up",
+  fetching_library: "Fetching your liked songs",
+  fetching_tags: "Looking up genres",
+  embedding: "Computing embeddings",
+};
+
 export default function Dashboard() {
   const [me, setMe] = useState<Me | null>(null);
   const [liked, setLiked] = useState<LikedResponse | null>(null);
@@ -111,6 +129,11 @@ export default function Dashboard() {
   const [autoError, setAutoError] = useState<string | null>(null);
   const [autoSaving, setAutoSaving] = useState<string | null>(null);
   const [autoSaved, setAutoSaved] = useState<Record<string, string>>({});
+
+  const [sync, setSync] = useState<SyncStatus | null>(null);
+
+  const isSyncing = sync?.status === "running";
+  const isSyncDone = sync?.status === "done";
 
   const [expanded, setExpanded] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, TrackInfo>>({});
@@ -147,6 +170,59 @@ export default function Dashboard() {
       }
     })();
   }, []);
+
+  // Poll sync status. While running, poll every 1.5s; otherwise every 30s.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      try {
+        const r = await fetch("/api/library/sync", { credentials: "include" });
+        if (!cancelled && r.ok) {
+          const data = (await r.json()) as SyncStatus;
+          setSync(data);
+        }
+      } catch {
+        // ignore
+      }
+      if (!cancelled) {
+        const wait = sync?.status === "running" ? 1500 : 30000;
+        timer = setTimeout(poll, wait);
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // We intentionally re-run when status flips from running ↔ idle so the
+    // cadence updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sync?.status]);
+
+  async function startSync(force = false) {
+    try {
+      const r = await fetch("/api/library/sync", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      });
+      if (r.ok) setSync(await r.json());
+    } catch {
+      // ignore
+    }
+  }
+
+  // Auto-trigger sync on first poll if the server reports idle (existing
+  // users who logged in before sync existed, or anyone whose login didn't
+  // race with the auto-spawn).
+  useEffect(() => {
+    if (sync?.status === "idle") {
+      startSync(false);
+    }
+  }, [sync?.status]);
 
   async function handleRegenerate() {
     setRegenerating(true);
@@ -323,6 +399,8 @@ export default function Dashboard() {
           {error && <p className="text-red-400 text-sm">{error}</p>}
         </header>
 
+        <SyncCard sync={sync} onResync={() => startSync(true)} />
+
         <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-5">
           <div>
             <h2 className="text-xl font-semibold text-white mb-1">
@@ -342,7 +420,7 @@ export default function Dashboard() {
             />
             <button
               type="submit"
-              disabled={generating || !vibe.trim()}
+              disabled={generating || !vibe.trim() || isSyncing || !isSyncDone}
               className="rounded-full bg-emerald-500 px-6 py-3 text-sm font-semibold text-black hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {generating ? "Generating…" : "Generate"}
@@ -404,7 +482,7 @@ export default function Dashboard() {
             </div>
             <button
               onClick={handleRegenerate}
-              disabled={regenerating}
+              disabled={regenerating || isSyncing || !isSyncDone}
               className="rounded-full border border-emerald-500 text-emerald-400 px-4 py-1.5 text-xs font-semibold hover:bg-emerald-500/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             >
               {regenerating
@@ -616,6 +694,120 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div>{children}</div>
     </div>
   );
+}
+
+function SyncCard({
+  sync,
+  onResync,
+}: {
+  sync: SyncStatus | null;
+  onResync: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (sync?.status !== "running") return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [sync?.status]);
+
+  if (!sync) return null;
+
+  if (sync.status === "done") {
+    return (
+      <section className="rounded-2xl border border-emerald-900/50 bg-emerald-950/20 px-6 py-4 flex items-center justify-between gap-3">
+        <div className="text-sm text-emerald-300">
+          Library synced{" "}
+          {sync.finished_at && (
+            <span className="text-emerald-300/60">
+              · {new Date(sync.finished_at).toLocaleString()}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onResync}
+          className="rounded-full border border-emerald-700 text-emerald-300 px-3 py-1 text-xs hover:bg-emerald-900/30"
+        >
+          Resync
+        </button>
+      </section>
+    );
+  }
+
+  if (sync.status === "failed") {
+    return (
+      <section className="rounded-2xl border border-red-900/50 bg-red-950/20 px-6 py-4 flex items-center justify-between gap-3">
+        <div className="text-sm text-red-300">
+          Sync failed{sync.error ? `: ${sync.error}` : ""}
+        </div>
+        <button
+          onClick={onResync}
+          className="rounded-full border border-red-700 text-red-300 px-3 py-1 text-xs hover:bg-red-900/30"
+        >
+          Retry
+        </button>
+      </section>
+    );
+  }
+
+  // running or idle (idle here usually means freshly logged in, sync about to start)
+  const stage = sync.stage ?? "starting";
+  const label = STAGE_LABEL[stage] ?? "Working";
+  const total = sync.total || 0;
+  const progress = sync.progress || 0;
+  const pct =
+    total > 0 ? Math.min(100, Math.round((progress / total) * 100)) : null;
+  let etaSeconds: number | null = null;
+  if (sync.started_at && progress > 0 && total > progress) {
+    const startedMs = new Date(sync.started_at).getTime();
+    const elapsed = (now - startedMs) / 1000;
+    const rate = progress / elapsed;
+    if (rate > 0) {
+      etaSeconds = Math.max(1, Math.round((total - progress) / rate));
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-6 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm uppercase tracking-[0.2em] text-emerald-400">
+            Syncing your library
+          </div>
+          <div className="text-white text-lg mt-1">{label}</div>
+        </div>
+        {etaSeconds !== null && (
+          <div className="text-right">
+            <div className="text-xs uppercase tracking-wider text-zinc-500">
+              ETA
+            </div>
+            <div className="text-white tabular-nums">
+              {formatEta(etaSeconds)}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="h-2 rounded-full bg-zinc-800 overflow-hidden">
+        <div
+          className="h-full bg-emerald-500 transition-[width] duration-500"
+          style={{ width: `${pct ?? 5}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between text-xs text-zinc-500 tabular-nums">
+        <span>
+          {progress.toLocaleString()}
+          {total > 0 ? ` / ${total.toLocaleString()}` : ""}
+        </span>
+        {pct !== null && <span>{pct}%</span>}
+      </div>
+    </section>
+  );
+}
+
+function formatEta(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s ? `${m}m ${s}s` : `${m}m`;
 }
 
 function AutoCard({
