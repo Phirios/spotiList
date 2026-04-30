@@ -79,6 +79,43 @@ impl LastFmClient {
             .map(|t| t.name)
             .collect()
     }
+
+    /// Same as `top_tags` but with noise filtered: year-only tags (e.g. "2017"),
+    /// decade tags ("2010s", "90s"), tags case-insensitively equal to the
+    /// artist or track name. Useful for building stable embedding inputs.
+    pub async fn clean_tags(&self, artist: &str, track: &str) -> Vec<String> {
+        let raw = self.top_tags(artist, track).await;
+        let artist_l = artist.to_lowercase();
+        let track_l = track.to_lowercase();
+        raw.into_iter()
+            .filter(|t| !is_noise(t, &artist_l, &track_l))
+            .collect()
+    }
+}
+
+fn is_noise(tag: &str, artist_l: &str, track_l: &str) -> bool {
+    let t = tag.trim().to_lowercase();
+    if t.is_empty() {
+        return true;
+    }
+    if t == *artist_l || t == *track_l {
+        return true;
+    }
+    // 4-digit year, e.g. "2017"
+    if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    // decade tags: "2010s", "90s", "1970s"
+    if (t.ends_with('s')
+        && t[..t.len() - 1].chars().all(|c| c.is_ascii_digit())
+        && (t.len() == 3 || t.len() == 5))
+        || t == "favourites"
+        || t == "favorites"
+        || t == "seen live"
+    {
+        return true;
+    }
+    false
 }
 
 fn count_value(v: &serde_json::Value) -> u64 {

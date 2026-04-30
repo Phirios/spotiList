@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
 use axum_extra::extract::cookie::PrivateCookieJar;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::{current_user, ensure_fresh_token};
@@ -10,6 +13,12 @@ use crate::error::{AppError, AppResult};
 use crate::AppState;
 
 const SPOTIFY_API: &str = "https://api.spotify.com/v1";
+
+/// Bumped whenever the `text_for(...)` format changes — appended to the
+/// embedder model id when caching, so old embeddings get refreshed lazily.
+const TEXT_VERSION: &str = "v2-tags";
+
+const TAG_FETCH_CONCURRENCY: usize = 8;
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/playlists/generate", post(generate))
@@ -55,7 +64,7 @@ struct SavedItem {
     track: TrackLite,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct TrackLite {
     id: Option<String>,
     name: String,
@@ -63,19 +72,19 @@ struct TrackLite {
     album: AlbumLite,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct ArtistLite {
     name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct AlbumLite {
     name: String,
     #[serde(default)]
     images: Vec<ImageLite>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct ImageLite {
     url: String,
 }
@@ -91,32 +100,30 @@ async fn generate(
 
     let mut user = current_user(&state, &jar).await?;
     let token = ensure_fresh_token(&state, &mut user).await?;
+    let stored_model = format!("{}#{}", state.embedder_model, TEXT_VERSION);
 
-    // 1. Fetch all liked tracks (paginated)
     let liked = fetch_all_liked(&state, &token).await?;
     let considered = liked.len();
     if liked.is_empty() {
         return Ok(Json(GeneratedPlaylist {
             vibe: req.vibe,
-            model: state.embedder_model.clone(),
+            model: stored_model,
             considered: 0,
             items: vec![],
         }));
     }
 
-    // 2. Build text representations
-    let texts: Vec<(String, String)> = liked
+    let liked_with_id: Vec<(String, TrackLite)> = liked
         .iter()
-        .filter_map(|t| t.id.as_ref().map(|id| (id.clone(), text_for(t))))
+        .filter_map(|t| t.id.as_ref().map(|id| (id.clone(), t.clone())))
         .collect();
 
-    // 3. Look up cached embeddings; embed misses
-    let ids: Vec<String> = texts.iter().map(|(id, _)| id.clone()).collect();
-    let cached = embeddings::fetch_cached(&state.db, &ids, &state.embedder_model)
+    let ids: Vec<String> = liked_with_id.iter().map(|(id, _)| id.clone()).collect();
+    let cached = embeddings::fetch_cached(&state.db, &ids, &stored_model)
         .await
         .map_err(|e| AppError::Internal(e.into()))?;
 
-    let missing: Vec<(String, String)> = texts
+    let missing: Vec<(String, TrackLite)> = liked_with_id
         .iter()
         .filter(|(id, _)| !cached.contains_key(id))
         .cloned()
@@ -125,8 +132,19 @@ async fn generate(
     let mut all_embeddings = cached;
 
     if !missing.is_empty() {
-        // Embed in batches of 128 to keep request size reasonable
-        for chunk in missing.chunks(128) {
+        // Fetch Last.fm tags concurrently for the missing tracks.
+        let tag_map = fetch_tags_concurrent(&state, &missing).await;
+
+        // Build enriched text per missing track.
+        let enriched: Vec<(String, String)> = missing
+            .iter()
+            .map(|(id, t)| {
+                let tags = tag_map.get(id).cloned().unwrap_or_default();
+                (id.clone(), text_for(t, &tags))
+            })
+            .collect();
+
+        for chunk in enriched.chunks(128) {
             let batch_texts: Vec<String> =
                 chunk.iter().map(|(_, t)| t.clone()).collect();
             let resp = state.embedder.embed(&batch_texts).await?;
@@ -135,7 +153,7 @@ async fn generate(
                 .zip(resp.embeddings.iter())
                 .map(|((id, text), emb)| (id.clone(), text.clone(), emb.clone()))
                 .collect();
-            embeddings::upsert_many(&state.db, &state.embedder_model, &to_upsert)
+            embeddings::upsert_many(&state.db, &stored_model, &to_upsert)
                 .await
                 .map_err(|e| AppError::Internal(e.into()))?;
             for (id, _, emb) in to_upsert {
@@ -144,18 +162,13 @@ async fn generate(
         }
     }
 
-    // 4. Embed the vibe prompt
-    let prompt_resp = state
-        .embedder
-        .embed(&[req.vibe.clone()])
-        .await?;
+    let prompt_resp = state.embedder.embed(&[req.vibe.clone()]).await?;
     let prompt_vec = prompt_resp
         .embeddings
         .into_iter()
         .next()
         .ok_or_else(|| AppError::Upstream("empty prompt embedding".into()))?;
 
-    // 5. Score and rank
     let mut scored: Vec<RankedTrack> = liked
         .iter()
         .filter_map(|t| {
@@ -173,25 +186,58 @@ async fn generate(
         })
         .collect();
 
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.truncate(req.limit.clamp(1, 100));
 
     Ok(Json(GeneratedPlaylist {
         vibe: req.vibe,
-        model: state.embedder_model.clone(),
+        model: stored_model,
         considered,
         items: scored,
     }))
 }
 
-fn text_for(t: &TrackLite) -> String {
+async fn fetch_tags_concurrent(
+    state: &AppState,
+    tracks: &[(String, TrackLite)],
+) -> HashMap<String, Vec<String>> {
+    let lastfm = state.lastfm.clone();
+    let results = stream::iter(tracks.iter().cloned())
+        .map(|(id, t)| {
+            let lastfm = lastfm.clone();
+            async move {
+                let primary_artist = t
+                    .artists
+                    .first()
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default();
+                let tags = lastfm.clean_tags(&primary_artist, &t.name).await;
+                (id, tags)
+            }
+        })
+        .buffer_unordered(TAG_FETCH_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    results.into_iter().collect()
+}
+
+fn text_for(t: &TrackLite, tags: &[String]) -> String {
     let artists = t
         .artists
         .iter()
         .map(|a| a.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    format!("{} by {} from album {}", t.name, artists, t.album.name)
+    let mut s = format!("{} by {} from album {}", t.name, artists, t.album.name);
+    if !tags.is_empty() {
+        s.push_str(". Tags: ");
+        s.push_str(&tags.join(", "));
+    }
+    s
 }
 
 async fn fetch_all_liked(state: &AppState, token: &str) -> AppResult<Vec<TrackLite>> {
