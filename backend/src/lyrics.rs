@@ -1,11 +1,14 @@
 use serde::Deserialize;
+use sqlx::Row;
 
+use crate::db::Pool;
 use crate::model::Lyrics;
 
 const API_BASE: &str = "https://lrclib.net/api";
 
 pub struct LrcLibClient {
     http: reqwest::Client,
+    db: Pool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -19,13 +22,33 @@ struct LrcResponse {
 }
 
 impl LrcLibClient {
-    pub fn new(http: reqwest::Client) -> Self {
-        Self { http }
+    pub fn new(http: reqwest::Client, db: Pool) -> Self {
+        Self { http, db }
     }
 
-    /// Try the exact `/get` endpoint first (fastest, deterministic),
-    /// then fall back to `/search` if no exact match is found.
-    pub async fn lookup(
+    /// Cache-first lookup keyed by Spotify track id. Returns the cached row
+    /// if present, otherwise falls back to LRCLIB and writes through.
+    /// We store both hits and misses (a row with all-null content represents
+    /// "we tried, no lyrics") so we don't keep retrying.
+    pub async fn lookup_cached(
+        &self,
+        spotify_track_id: &str,
+        artist: &str,
+        track: &str,
+        album: Option<&str>,
+        duration_secs: u64,
+    ) -> Option<Lyrics> {
+        if let Ok(Some(cached)) = self.cached(spotify_track_id).await {
+            return cached;
+        }
+        let fresh = self.lookup_upstream(artist, track, album, duration_secs).await;
+        let _ = self.store(spotify_track_id, fresh.as_ref()).await;
+        fresh
+    }
+
+    /// Direct LRCLIB lookup with no caching. Useful if there's no Spotify
+    /// id to key by.
+    pub async fn lookup_upstream(
         &self,
         artist: &str,
         track: &str,
@@ -86,6 +109,53 @@ impl LrcLibClient {
             return None;
         }
         Some(into_lyrics(hits.remove(0)))
+    }
+
+    async fn cached(&self, id: &str) -> sqlx::Result<Option<Option<Lyrics>>> {
+        let row = sqlx::query(
+            "SELECT plain, synced, instrumental FROM track_lyrics WHERE spotify_track_id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.db)
+        .await?;
+        Ok(row.map(|r| {
+            let plain: Option<String> = r.try_get("plain").ok().flatten();
+            let synced: Option<String> = r.try_get("synced").ok().flatten();
+            let instrumental: bool = r.try_get("instrumental").unwrap_or(false);
+            if plain.is_none() && synced.is_none() && !instrumental {
+                None
+            } else {
+                Some(Lyrics {
+                    plain,
+                    synced,
+                    instrumental,
+                    source: "lrclib",
+                })
+            }
+        }))
+    }
+
+    async fn store(&self, id: &str, lyrics: Option<&Lyrics>) -> sqlx::Result<()> {
+        let (plain, synced, instrumental) = match lyrics {
+            Some(l) => (l.plain.as_deref(), l.synced.as_deref(), l.instrumental),
+            None => (None, None, false),
+        };
+        sqlx::query(
+            "INSERT INTO track_lyrics (spotify_track_id, plain, synced, instrumental, looked_up_at) \
+             VALUES ($1, $2, $3, $4, now()) \
+             ON CONFLICT (spotify_track_id) DO UPDATE SET \
+                plain = EXCLUDED.plain, \
+                synced = EXCLUDED.synced, \
+                instrumental = EXCLUDED.instrumental, \
+                looked_up_at = now()",
+        )
+        .bind(id)
+        .bind(plain)
+        .bind(synced)
+        .bind(instrumental)
+        .execute(&self.db)
+        .await?;
+        Ok(())
     }
 }
 

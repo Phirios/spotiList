@@ -9,22 +9,30 @@ type Me = {
   email: string | null;
 };
 
-type LikedItem = {
-  added_at: string;
-  track: {
-    id: string;
-    name: string;
-    duration_ms: number;
-    artists: { id: string; name: string }[];
-    album: { name: string; images?: { url: string }[] };
-  };
+type LibraryItem = {
+  id: string;
+  name: string;
+  artists: string[];
+  album: string;
+  image_url: string | null;
+  added_at: string | null;
 };
 
-type LikedResponse = {
-  items: LikedItem[];
+type LibraryResponse = {
+  items: LibraryItem[];
   total: number;
   limit: number;
   offset: number;
+  q: string | null;
+};
+
+type SimilarTrack = {
+  id: string;
+  name: string;
+  artists: string[];
+  album: string;
+  image_url: string | null;
+  score: number;
 };
 
 type RankedTrack = {
@@ -110,7 +118,9 @@ const STAGE_LABEL: Record<NonNullable<SyncStatus["stage"]>, string> = {
 
 export default function Dashboard() {
   const [me, setMe] = useState<Me | null>(null);
-  const [liked, setLiked] = useState<LikedResponse | null>(null);
+  const [library, setLibrary] = useState<LibraryResponse | null>(null);
+  const [libraryQ, setLibraryQ] = useState("");
+  const [libraryLoading, setLibraryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -139,6 +149,8 @@ export default function Dashboard() {
   const [details, setDetails] = useState<Record<string, TrackInfo>>({});
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [similar, setSimilar] = useState<Record<string, SimilarTrack[]>>({});
+  const [similarLoading, setSimilarLoading] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -151,9 +163,9 @@ export default function Dashboard() {
         if (!meRes.ok) throw new Error(`me ${meRes.status}`);
         setMe(await meRes.json());
 
-        const likedRes = await fetch("/api/me/liked?limit=20", { credentials: "include" });
-        if (!likedRes.ok) throw new Error(`liked ${likedRes.status}`);
-        setLiked(await likedRes.json());
+        const libRes = await fetch("/api/me/library?limit=30", { credentials: "include" });
+        if (!libRes.ok) throw new Error(`library ${libRes.status}`);
+        setLibrary(await libRes.json());
       } catch (e) {
         setError(String(e));
       } finally {
@@ -224,6 +236,26 @@ export default function Dashboard() {
     }
   }, [sync?.status]);
 
+  // Debounced library search — re-query 250ms after the user stops typing.
+  useEffect(() => {
+    if (loading) return; // initial fetch handled in mount effect
+    const t = setTimeout(async () => {
+      setLibraryLoading(true);
+      try {
+        const url = libraryQ.trim()
+          ? `/api/me/library?limit=50&q=${encodeURIComponent(libraryQ.trim())}`
+          : `/api/me/library?limit=30`;
+        const r = await fetch(url, { credentials: "include" });
+        if (r.ok) setLibrary(await r.json());
+      } catch {
+        // ignore — keep showing previous results
+      } finally {
+        setLibraryLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [libraryQ, loading]);
+
   async function handleRegenerate() {
     setRegenerating(true);
     setAutoError(null);
@@ -274,20 +306,41 @@ export default function Dashboard() {
       }
       setExpanded(id);
       setDetailError(null);
-      if (details[id]) return;
-      setDetailLoading(id);
-      try {
-        const r = await fetch(`/api/tracks/${id}`);
-        if (!r.ok) throw new Error(`${r.status}`);
-        const info = (await r.json()) as TrackInfo;
-        setDetails((prev) => ({ ...prev, [id]: info }));
-      } catch (e) {
-        setDetailError(String(e));
-      } finally {
-        setDetailLoading(null);
+
+      // Fetch detail (cache hit for previously opened tracks).
+      if (!details[id]) {
+        setDetailLoading(id);
+        try {
+          const r = await fetch(`/api/tracks/${id}`);
+          if (!r.ok) throw new Error(`${r.status}`);
+          const info = (await r.json()) as TrackInfo;
+          setDetails((prev) => ({ ...prev, [id]: info }));
+        } catch (e) {
+          setDetailError(String(e));
+        } finally {
+          setDetailLoading(null);
+        }
+      }
+
+      // Fetch similar tracks (also memoized).
+      if (!similar[id]) {
+        setSimilarLoading(id);
+        try {
+          const r = await fetch(`/api/tracks/${id}/similar?limit=8`, {
+            credentials: "include",
+          });
+          if (r.ok) {
+            const list = (await r.json()) as SimilarTrack[];
+            setSimilar((prev) => ({ ...prev, [id]: list }));
+          }
+        } catch {
+          // ignore — similar is best-effort
+        } finally {
+          setSimilarLoading(null);
+        }
       }
     },
-    [expanded, details],
+    [expanded, details, similar],
   );
 
   async function handleGenerate(e: React.FormEvent) {
@@ -356,14 +409,16 @@ export default function Dashboard() {
     window.location.href = "/";
   }
 
-  const likedRows: Row[] =
-    liked?.items.map(({ track, added_at }) => ({
-      id: track.id,
-      name: track.name,
-      artistsLine: track.artists.map((a) => a.name).join(", "),
-      album: track.album.name,
-      image: track.album.images?.[0]?.url ?? null,
-      trailing: new Date(added_at).toLocaleDateString(),
+  const libraryRows: Row[] =
+    library?.items.map((t) => ({
+      id: t.id,
+      name: t.name,
+      artistsLine: t.artists.join(", "),
+      album: t.album,
+      image: t.image_url,
+      trailing: t.added_at
+        ? new Date(t.added_at).toLocaleDateString()
+        : undefined,
     })) ?? [];
 
   const generatedRows: Row[] =
@@ -463,6 +518,8 @@ export default function Dashboard() {
                 details={details}
                 detailLoading={detailLoading}
                 detailError={detailError}
+                similar={similar}
+                similarLoading={similarLoading}
                 onToggle={toggleTrack}
               />
             </div>
@@ -515,27 +572,43 @@ export default function Dashboard() {
           )}
         </section>
 
-        {liked && (
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-6">
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 sm:p-10 flex flex-col gap-5">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <h2 className="text-xl font-semibold text-white mb-1">
                 Your library
               </h2>
               <p className="text-zinc-400 text-sm">
-                {liked.total.toLocaleString()} liked songs · showing{" "}
-                {liked.items.length}
+                {library
+                  ? `${library.total.toLocaleString()} ${library.q ? "matches" : "liked songs"} · showing ${library.items.length}`
+                  : "Loading…"}
               </p>
             </div>
-            <TrackList
-              rows={likedRows}
-              expanded={expanded}
-              details={details}
-              detailLoading={detailLoading}
-              detailError={detailError}
-              onToggle={toggleTrack}
+            <input
+              type="text"
+              value={libraryQ}
+              onChange={(e) => setLibraryQ(e.target.value)}
+              placeholder="Search by name, artist, album…"
+              className="rounded-full bg-black border border-zinc-800 px-4 py-2 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500 w-full sm:w-72"
             />
-          </section>
-        )}
+          </div>
+          {libraryLoading && (
+            <p className="text-zinc-500 text-xs">Searching…</p>
+          )}
+          {library && library.items.length === 0 && !libraryLoading && (
+            <p className="text-zinc-500 text-sm">No matches.</p>
+          )}
+          <TrackList
+            rows={libraryRows}
+            expanded={expanded}
+            details={details}
+            detailLoading={detailLoading}
+            detailError={detailError}
+            similar={similar}
+            similarLoading={similarLoading}
+            onToggle={toggleTrack}
+          />
+        </section>
 
         {me && (
           <section className="flex gap-3">
@@ -558,6 +631,8 @@ function TrackList({
   details,
   detailLoading,
   detailError,
+  similar,
+  similarLoading,
   onToggle,
 }: {
   rows: Row[];
@@ -565,6 +640,8 @@ function TrackList({
   details: Record<string, TrackInfo>;
   detailLoading: string | null;
   detailError: string | null;
+  similar: Record<string, SimilarTrack[]>;
+  similarLoading: string | null;
   onToggle: (id: string) => void;
 }) {
   return (
@@ -572,6 +649,7 @@ function TrackList({
       {rows.map((row) => {
         const isOpen = expanded === row.id;
         const info = details[row.id];
+        const sim = similar[row.id];
         return (
           <li key={row.id} className="flex flex-col">
             <button
@@ -604,6 +682,9 @@ function TrackList({
                 loading={detailLoading === row.id}
                 error={detailError}
                 info={info}
+                similar={sim}
+                similarLoading={similarLoading === row.id}
+                onPick={onToggle}
               />
             )}
           </li>
@@ -617,10 +698,16 @@ function TrackDetail({
   loading,
   error,
   info,
+  similar,
+  similarLoading,
+  onPick,
 }: {
   loading: boolean;
   error: string | null;
   info: TrackInfo | undefined;
+  similar: SimilarTrack[] | undefined;
+  similarLoading: boolean;
+  onPick: (id: string) => void;
 }) {
   return (
     <div className="ml-16 mr-3 my-3 rounded-xl border border-zinc-800 bg-black/40 p-5 text-sm">
@@ -679,6 +766,48 @@ function TrackDetail({
               <p className="text-zinc-500">Instrumental</p>
             ) : (
               <p className="text-zinc-600">—</p>
+            )}
+          </div>
+          <div className="sm:col-span-3">
+            <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
+              Similar in your library
+            </div>
+            {similarLoading && !similar ? (
+              <p className="text-zinc-500 text-sm">Looking…</p>
+            ) : similar && similar.length > 0 ? (
+              <ul className="flex flex-col gap-1">
+                {similar.map((s) => (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => onPick(s.id)}
+                      className="flex items-center gap-3 w-full py-1.5 px-2 -mx-2 rounded hover:bg-zinc-900/50 text-left"
+                    >
+                      {s.image_url && (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={s.image_url}
+                          alt=""
+                          className="h-8 w-8 rounded object-cover flex-shrink-0"
+                        />
+                      )}
+                      <span className="flex-1 min-w-0 text-sm">
+                        <span className="text-white truncate block">
+                          {s.name}
+                        </span>
+                        <span className="text-zinc-500 text-xs truncate block">
+                          {s.artists.join(", ")}
+                        </span>
+                      </span>
+                      <span className="text-xs text-zinc-500 tabular-nums flex-shrink-0">
+                        {s.score.toFixed(2)}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-zinc-600 text-sm">—</p>
             )}
           </div>
         </div>

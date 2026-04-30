@@ -1,10 +1,14 @@
 use serde::Deserialize;
+use sqlx::Row;
+
+use crate::db::Pool;
 
 const API_BASE: &str = "https://ws.audioscrobbler.com/2.0/";
 
 pub struct LastFmClient {
     http: reqwest::Client,
     api_key: Option<String>,
+    db: Pool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -27,8 +31,47 @@ struct Tag {
 }
 
 impl LastFmClient {
-    pub fn new(http: reqwest::Client, api_key: Option<String>) -> Self {
-        Self { http, api_key }
+    pub fn new(http: reqwest::Client, api_key: Option<String>, db: Pool) -> Self {
+        Self { http, api_key, db }
+    }
+
+    /// Cache-first variant of `clean_tags` keyed by Spotify track id.
+    /// Reads from `track_tags` if present, otherwise fetches and stores.
+    pub async fn clean_tags_cached(
+        &self,
+        spotify_track_id: &str,
+        artist: &str,
+        track: &str,
+    ) -> Vec<String> {
+        if let Ok(Some(cached)) = self.cached(spotify_track_id).await {
+            return cached;
+        }
+        let fresh = self.clean_tags(artist, track).await;
+        let _ = self.store(spotify_track_id, &fresh).await;
+        fresh
+    }
+
+    async fn cached(&self, id: &str) -> sqlx::Result<Option<Vec<String>>> {
+        let row = sqlx::query("SELECT tags FROM track_tags WHERE spotify_track_id = $1")
+            .bind(id)
+            .fetch_optional(&self.db)
+            .await?;
+        Ok(row.and_then(|r| r.try_get::<Vec<String>, _>("tags").ok()))
+    }
+
+    async fn store(&self, id: &str, tags: &[String]) -> sqlx::Result<()> {
+        sqlx::query(
+            "INSERT INTO track_tags (spotify_track_id, tags, looked_up_at) \
+             VALUES ($1, $2, now()) \
+             ON CONFLICT (spotify_track_id) DO UPDATE SET \
+                tags = EXCLUDED.tags, \
+                looked_up_at = now()",
+        )
+        .bind(id)
+        .bind(tags)
+        .execute(&self.db)
+        .await?;
+        Ok(())
     }
 
     /// Returns top tags filtered to those with non-zero count, capped to 10.

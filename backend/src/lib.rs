@@ -107,8 +107,12 @@ pub async fn build_state(cfg: Config) -> anyhow::Result<AppState> {
             cfg.getsongbpm_api_key,
             pool.clone(),
         )),
-        lyrics: Arc::new(lyrics::LrcLibClient::new(http.clone())),
-        lastfm: Arc::new(lastfm::LastFmClient::new(http.clone(), cfg.lastfm_api_key)),
+        lyrics: Arc::new(lyrics::LrcLibClient::new(http.clone(), pool.clone())),
+        lastfm: Arc::new(lastfm::LastFmClient::new(
+            http.clone(),
+            cfg.lastfm_api_key,
+            pool.clone(),
+        )),
         embedder: Arc::new(embeddings::EmbedderClient::new(
             http.clone(),
             cfg.embedder_url,
