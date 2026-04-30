@@ -8,7 +8,7 @@ pub struct TrackInfo {
     pub album: Album,
     pub duration_ms: u64,
     pub explicit: bool,
-    pub popularity: u8,
+    pub popularity: Option<u8>,
     pub isrc: Option<String>,
     pub spotify_url: Option<String>,
     pub genres: Vec<String>,

@@ -33,7 +33,8 @@ pub struct SpotifyTrack {
     pub name: String,
     pub duration_ms: u64,
     pub explicit: bool,
-    pub popularity: u8,
+    #[serde(default)]
+    pub popularity: Option<u8>,
     pub artists: Vec<SpotifyArtistRef>,
     pub album: SpotifyAlbum,
     pub external_ids: Option<SpotifyExternalIds>,

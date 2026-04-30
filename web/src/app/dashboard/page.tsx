@@ -50,7 +50,7 @@ type TrackInfo = {
   album: { id: string; name: string; release_date: string | null; image_url: string | null };
   duration_ms: number;
   explicit: boolean;
-  popularity: number;
+  popularity: number | null;
   isrc: string | null;
   spotify_url: string | null;
   genres: string[];
@@ -387,7 +387,11 @@ function TrackDetail({
             )}
           </Field>
           <Field label="Popularity">
-            <span className="text-white tabular-nums">{info.popularity}</span>
+            {info.popularity !== null ? (
+              <span className="text-white tabular-nums">{info.popularity}</span>
+            ) : (
+              <span className="text-zinc-600">—</span>
+            )}
           </Field>
           <div className="sm:col-span-3">
             <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
