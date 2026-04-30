@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 
 type Me = {
   id: string;
@@ -43,6 +43,35 @@ type GeneratedPlaylist = {
   items: RankedTrack[];
 };
 
+type TrackInfo = {
+  id: string;
+  name: string;
+  artists: { id: string; name: string }[];
+  album: { id: string; name: string; release_date: string | null; image_url: string | null };
+  duration_ms: number;
+  explicit: boolean;
+  popularity: number;
+  isrc: string | null;
+  spotify_url: string | null;
+  genres: string[];
+  bpm: { tempo: number; source: string } | null;
+  lyrics: {
+    plain: string | null;
+    synced: string | null;
+    instrumental: boolean;
+    source: string;
+  } | null;
+};
+
+type Row = {
+  id: string;
+  name: string;
+  artistsLine: string;
+  album: string;
+  image: string | null;
+  trailing?: string;
+};
+
 export default function Dashboard() {
   const [me, setMe] = useState<Me | null>(null);
   const [liked, setLiked] = useState<LikedResponse | null>(null);
@@ -53,6 +82,11 @@ export default function Dashboard() {
   const [generating, setGenerating] = useState(false);
   const [generated, setGenerated] = useState<GeneratedPlaylist | null>(null);
   const [generateError, setGenerateError] = useState<string | null>(null);
+
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [details, setDetails] = useState<Record<string, TrackInfo>>({});
+  const [detailLoading, setDetailLoading] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -75,6 +109,30 @@ export default function Dashboard() {
       }
     })();
   }, []);
+
+  const toggleTrack = useCallback(
+    async (id: string) => {
+      if (expanded === id) {
+        setExpanded(null);
+        return;
+      }
+      setExpanded(id);
+      setDetailError(null);
+      if (details[id]) return;
+      setDetailLoading(id);
+      try {
+        const r = await fetch(`/api/tracks/${id}`);
+        if (!r.ok) throw new Error(`${r.status}`);
+        const info = (await r.json()) as TrackInfo;
+        setDetails((prev) => ({ ...prev, [id]: info }));
+      } catch (e) {
+        setDetailError(String(e));
+      } finally {
+        setDetailLoading(null);
+      }
+    },
+    [expanded, details],
+  );
 
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
@@ -105,6 +163,26 @@ export default function Dashboard() {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     window.location.href = "/";
   }
+
+  const likedRows: Row[] =
+    liked?.items.map(({ track, added_at }) => ({
+      id: track.id,
+      name: track.name,
+      artistsLine: track.artists.map((a) => a.name).join(", "),
+      album: track.album.name,
+      image: track.album.images?.[0]?.url ?? null,
+      trailing: new Date(added_at).toLocaleDateString(),
+    })) ?? [];
+
+  const generatedRows: Row[] =
+    generated?.items.map((t) => ({
+      id: t.id,
+      name: t.name,
+      artistsLine: t.artists.join(", "),
+      album: t.album,
+      image: t.image_url,
+      trailing: t.score.toFixed(3),
+    })) ?? [];
 
   return (
     <div className="flex flex-1 flex-col bg-black font-sans text-zinc-200">
@@ -148,38 +226,21 @@ export default function Dashboard() {
               {generating ? "Generating…" : "Generate"}
             </button>
           </form>
-          {generateError && (
-            <p className="text-red-400 text-sm">{generateError}</p>
-          )}
+          {generateError && <p className="text-red-400 text-sm">{generateError}</p>}
           {generated && (
             <div className="flex flex-col gap-2">
               <p className="text-zinc-500 text-xs">
                 {generated.items.length} of {generated.considered} liked songs ·{" "}
                 model: {generated.model.split("/").pop()}
               </p>
-              <ul className="divide-y divide-zinc-900">
-                {generated.items.map((t) => (
-                  <li key={t.id} className="flex items-center gap-4 py-3">
-                    {t.image_url && (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
-                        src={t.image_url}
-                        alt=""
-                        className="h-12 w-12 rounded object-cover"
-                      />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-white truncate">{t.name}</div>
-                      <div className="text-sm text-zinc-400 truncate">
-                        {t.artists.join(", ")} · {t.album}
-                      </div>
-                    </div>
-                    <div className="text-xs text-zinc-500 hidden sm:block tabular-nums">
-                      {t.score.toFixed(3)}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              <TrackList
+                rows={generatedRows}
+                expanded={expanded}
+                details={details}
+                detailLoading={detailLoading}
+                detailError={detailError}
+                onToggle={toggleTrack}
+              />
             </div>
           )}
         </section>
@@ -195,30 +256,14 @@ export default function Dashboard() {
                 {liked.items.length}
               </p>
             </div>
-            <ul className="divide-y divide-zinc-900">
-              {liked.items.map(({ track, added_at }) => (
-                <li key={track.id} className="flex items-center gap-4 py-3">
-                  {track.album.images?.[0]?.url && (
-                    /* eslint-disable-next-line @next/next/no-img-element */
-                    <img
-                      src={track.album.images[0].url}
-                      alt=""
-                      className="h-12 w-12 rounded object-cover"
-                    />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="text-white truncate">{track.name}</div>
-                    <div className="text-sm text-zinc-400 truncate">
-                      {track.artists.map((a) => a.name).join(", ")} ·{" "}
-                      {track.album.name}
-                    </div>
-                  </div>
-                  <div className="text-xs text-zinc-500 hidden sm:block">
-                    {new Date(added_at).toLocaleDateString()}
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <TrackList
+              rows={likedRows}
+              expanded={expanded}
+              details={details}
+              detailLoading={detailLoading}
+              detailError={detailError}
+              onToggle={toggleTrack}
+            />
           </section>
         )}
 
@@ -233,6 +278,146 @@ export default function Dashboard() {
           </section>
         )}
       </main>
+    </div>
+  );
+}
+
+function TrackList({
+  rows,
+  expanded,
+  details,
+  detailLoading,
+  detailError,
+  onToggle,
+}: {
+  rows: Row[];
+  expanded: string | null;
+  details: Record<string, TrackInfo>;
+  detailLoading: string | null;
+  detailError: string | null;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <ul className="divide-y divide-zinc-900">
+      {rows.map((row) => {
+        const isOpen = expanded === row.id;
+        const info = details[row.id];
+        return (
+          <li key={row.id} className="flex flex-col">
+            <button
+              type="button"
+              onClick={() => onToggle(row.id)}
+              className="flex items-center gap-4 py-3 text-left w-full hover:bg-zinc-900/50 -mx-3 px-3 rounded-md transition-colors"
+            >
+              {row.image && (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={row.image}
+                  alt=""
+                  className="h-12 w-12 rounded object-cover flex-shrink-0"
+                />
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="text-white truncate">{row.name}</div>
+                <div className="text-sm text-zinc-400 truncate">
+                  {row.artistsLine} · {row.album}
+                </div>
+              </div>
+              {row.trailing && (
+                <div className="text-xs text-zinc-500 hidden sm:block tabular-nums flex-shrink-0">
+                  {row.trailing}
+                </div>
+              )}
+            </button>
+            {isOpen && (
+              <TrackDetail
+                loading={detailLoading === row.id}
+                error={detailError}
+                info={info}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function TrackDetail({
+  loading,
+  error,
+  info,
+}: {
+  loading: boolean;
+  error: string | null;
+  info: TrackInfo | undefined;
+}) {
+  return (
+    <div className="ml-16 mr-3 my-3 rounded-xl border border-zinc-800 bg-black/40 p-5 text-sm">
+      {loading && <p className="text-zinc-500">Loading metadata…</p>}
+      {error && !loading && <p className="text-red-400">{error}</p>}
+      {info && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+          <Field label="BPM">
+            {info.bpm ? (
+              <span className="text-white tabular-nums">
+                {info.bpm.tempo.toFixed(1)}{" "}
+                <span className="text-zinc-500 text-xs">
+                  ({info.bpm.source})
+                </span>
+              </span>
+            ) : (
+              <span className="text-zinc-600">—</span>
+            )}
+          </Field>
+          <Field label="Genres">
+            {info.genres.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {info.genres.map((g) => (
+                  <span
+                    key={g}
+                    className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-300"
+                  >
+                    {g}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className="text-zinc-600">—</span>
+            )}
+          </Field>
+          <Field label="Popularity">
+            <span className="text-white tabular-nums">{info.popularity}</span>
+          </Field>
+          <div className="sm:col-span-3">
+            <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
+              Lyrics
+            </div>
+            {info.lyrics?.synced ? (
+              <pre className="whitespace-pre-wrap font-sans text-zinc-300 max-h-64 overflow-y-auto">
+                {info.lyrics.synced}
+              </pre>
+            ) : info.lyrics?.plain ? (
+              <pre className="whitespace-pre-wrap font-sans text-zinc-300 max-h-64 overflow-y-auto">
+                {info.lyrics.plain}
+              </pre>
+            ) : info.lyrics?.instrumental ? (
+              <p className="text-zinc-500">Instrumental</p>
+            ) : (
+              <p className="text-zinc-600">—</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{label}</div>
+      <div>{children}</div>
     </div>
   );
 }
