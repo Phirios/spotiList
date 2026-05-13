@@ -10,17 +10,20 @@ WORKDIR /app
 
 # Install CPU-only torch wheel first (smaller than the default which pulls CUDA)
 RUN pip install --upgrade pip \
- && pip install --extra-index-url https://download.pytorch.org/whl/cpu torch==2.5.1+cpu
+ && pip install --extra-index-url https://download.pytorch.org/whl/cpu torch==2.6.0+cpu
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app ./app
 
-# Pre-download the model so first request isn't slow
+# Pre-download the models so first request isn't slow
 ARG MODEL_NAME=sentence-transformers/all-MiniLM-L6-v2
-ENV MODEL_NAME=${MODEL_NAME}
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${MODEL_NAME}')"
+ARG EMOTION_MODEL=j-hartmann/emotion-english-distilroberta-base
+ENV MODEL_NAME=${MODEL_NAME} \
+    EMOTION_MODEL=${EMOTION_MODEL}
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${MODEL_NAME}')" \
+ && python -c "from transformers import pipeline; pipeline('text-classification', model='${EMOTION_MODEL}', top_k=None)"
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -3,17 +3,23 @@ use axum::response::Redirect;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::{Cookie, Key, PrivateCookieJar, SameSite};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use chrono::{Duration, Utc};
-use rand::distributions::{Alphanumeric, DistString};
+use hmac::{Hmac, Mac};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::user::{self, UpsertUser, User};
 use crate::AppState;
 
-const STATE_COOKIE: &str = "spoti_state";
 const SESSION_COOKIE: &str = "spoti_session";
+const STATE_TTL: i64 = 600;
+
+type HmacSha256 = Hmac<Sha256>;
 const SCOPES: &str = "user-read-email user-read-private user-library-read \
                       playlist-modify-public playlist-modify-private";
 
@@ -36,28 +42,47 @@ pub fn router() -> Router<AppState> {
         .route("/auth/me", get(me))
 }
 
-async fn login(
-    State(state): State<AppState>,
-    jar: PrivateCookieJar,
-) -> (PrivateCookieJar, Redirect) {
-    let csrf = Alphanumeric.sample_string(&mut rand::thread_rng(), 32);
-    let cookie = Cookie::build((STATE_COOKIE, csrf.clone()))
-        .http_only(true)
-        .secure(state.cookie_secure)
-        .same_site(SameSite::Lax)
-        .path("/")
-        .max_age(time::Duration::minutes(10))
-        .build();
-
+async fn login(State(state): State<AppState>) -> Redirect {
+    let st = mint_state(&state.oauth_state_key);
     let url = format!(
-        "{SPOTIFY_AUTHORIZE}?response_type=code&client_id={cid}&scope={scope}&redirect_uri={ruri}&state={st}",
+        "{SPOTIFY_AUTHORIZE}?response_type=code&client_id={cid}&scope={scope}&redirect_uri={ruri}&state={st_q}",
         cid = urlencode(&state.spotify_oauth.client_id),
         scope = urlencode(SCOPES),
         ruri = urlencode(&state.spotify_oauth.redirect_uri),
-        st = urlencode(&csrf),
+        st_q = urlencode(&st),
     );
+    Redirect::to(&url)
+}
 
-    (jar.add(cookie), Redirect::to(&url))
+fn mint_state(key: &[u8; 32]) -> String {
+    let mut payload = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut payload[..16]);
+    let ts = Utc::now().timestamp();
+    payload[16..].copy_from_slice(&ts.to_be_bytes());
+    let mut mac = HmacSha256::new_from_slice(key).expect("hmac key");
+    mac.update(&payload);
+    let sig = mac.finalize().into_bytes();
+    let mut out = Vec::with_capacity(24 + 32);
+    out.extend_from_slice(&payload);
+    out.extend_from_slice(&sig);
+    URL_SAFE_NO_PAD.encode(out)
+}
+
+fn verify_state(key: &[u8; 32], state: &str) -> Result<(), &'static str> {
+    let raw = URL_SAFE_NO_PAD.decode(state).map_err(|_| "bad state encoding")?;
+    if raw.len() != 56 {
+        return Err("bad state length");
+    }
+    let (payload, sig) = raw.split_at(24);
+    let mut mac = HmacSha256::new_from_slice(key).expect("hmac key");
+    mac.update(payload);
+    mac.verify_slice(sig).map_err(|_| "state signature invalid")?;
+    let ts = i64::from_be_bytes(payload[16..24].try_into().unwrap());
+    let age = Utc::now().timestamp() - ts;
+    if !(0..=STATE_TTL).contains(&age) {
+        return Err("state expired");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,13 +105,8 @@ async fn callback(
         .state
         .ok_or_else(|| AppError::Auth("missing state".into()))?;
 
-    let stored_state = jar
-        .get(STATE_COOKIE)
-        .map(|c| c.value().to_string())
-        .ok_or_else(|| AppError::Auth("missing state cookie".into()))?;
-    if stored_state != returned_state {
-        return Err(AppError::Auth("state mismatch".into()));
-    }
+    verify_state(&state.oauth_state_key, &returned_state)
+        .map_err(|e| AppError::Auth(e.into()))?;
 
     let token = exchange_code(&state, &code).await?;
     let profile = fetch_profile(&state, &token.access_token).await?;
@@ -126,8 +146,7 @@ async fn callback(
         .path("/")
         .max_age(time::Duration::days(30))
         .build();
-    let removal = Cookie::build(STATE_COOKIE).path("/").build();
-    let jar = jar.remove(removal).add(session_cookie);
+    let jar = jar.add(session_cookie);
 
     Ok((jar, Redirect::to(&state.web_url_after_login)))
 }

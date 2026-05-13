@@ -21,6 +21,12 @@ impl From<reqwest::Error> for AppError {
     }
 }
 
+impl From<sqlx::Error> for AppError {
+    fn from(e: sqlx::Error) -> Self {
+        AppError::Internal(e.into())
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, msg) = match &self {

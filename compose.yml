@@ -1,0 +1,81 @@
+name: spoti
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: spoti
+      POSTGRES_PASSWORD: spoti
+      POSTGRES_DB: spoti
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spoti -d spoti"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  embedder:
+    build:
+      context: ./embedder
+    volumes:
+      - hf_cache:/cache/hf
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:8000/docs', timeout=2); sys.exit(0)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  yt-scraper:
+    build:
+      context: ./yt-scraper
+    environment:
+      YT_PROXIES: ${YT_PROXIES:-}
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:8001/healthz', timeout=2); sys.exit(0)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://spoti:spoti@db:5432/spoti
+      EMBEDDER_URL: http://embedder:8000
+      YT_SCRAPER_URL: http://yt-scraper:8001
+      BIND_ADDR: 0.0.0.0:8080
+      COOKIE_SECURE: "false"
+      RUST_LOG: info,spoti_backend=debug
+    depends_on:
+      db:
+        condition: service_healthy
+      embedder:
+        condition: service_started
+      yt-scraper:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  web:
+    build:
+      context: ./web
+    environment:
+      BACKEND_URL: http://backend:8080
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  pgdata:
+  hf_cache:

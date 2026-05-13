@@ -28,6 +28,7 @@ async-trait = "0.1"
 url = "2"
 time = "0.3"
 sha2 = "0.10"
+hmac = "0.12"
 
 [lib]
 path = "src/lib.rs"

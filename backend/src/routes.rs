@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::BTreeSet;
 
@@ -14,6 +14,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/tracks/:id", get(get_track))
         .route("/tracks/:id/similar", get(similar_tracks))
+        .route("/tracks/:id/emotion", post(track_emotion))
         .merge(crate::auth::router())
         .merge(crate::me::router())
         .merge(crate::playlists::router())
@@ -271,4 +272,51 @@ async fn similar_tracks(
     scored.truncate(q.limit.clamp(1, 50));
 
     Ok(Json(scored))
+}
+
+#[derive(Debug, Serialize)]
+struct EmotionResponseDto {
+    spotify_track_id: String,
+    joy: f32,
+    sadness: f32,
+    anger: f32,
+    fear: f32,
+    surprise: f32,
+    disgust: f32,
+    neutral: f32,
+    comment_count: i32,
+}
+
+async fn track_emotion(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> AppResult<Json<EmotionResponseDto>> {
+    let meta = match load_cached_track(&state, &id).await? {
+        Some(m) => m,
+        None => upstream_track_meta(&state, &id).await?,
+    };
+    let primary_artist = meta
+        .artists
+        .first()
+        .cloned()
+        .ok_or_else(|| AppError::NotFound(id.clone()))?;
+    let duration_sec = meta.duration_ms.map(|ms| (ms / 1000).max(1));
+
+    let vec = state
+        .youtube
+        .ensure_emotion(&id, &meta.name, &primary_artist, duration_sec)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("no youtube match for {id}")))?;
+
+    Ok(Json(EmotionResponseDto {
+        spotify_track_id: id,
+        joy: vec.joy,
+        sadness: vec.sadness,
+        anger: vec.anger,
+        fear: vec.fear,
+        surprise: vec.surprise,
+        disgust: vec.disgust,
+        neutral: vec.neutral,
+        comment_count: vec.comment_count,
+    }))
 }

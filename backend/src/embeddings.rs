@@ -52,6 +52,42 @@ impl EmbedderClient {
         }
         Ok(resp.json().await?)
     }
+
+    pub async fn emotion(
+        &self,
+        texts: &[String],
+        weights: Option<&[f32]>,
+    ) -> AppResult<EmotionResponse> {
+        let resp = self
+            .http
+            .post(format!("{}/emotion", self.base_url))
+            .json(&EmotionRequest { texts, weights })
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Upstream(format!(
+                "emotion failed: {s}: {body}"
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmotionRequest<'a> {
+    pub texts: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weights: Option<&'a [f32]>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EmotionResponse {
+    pub model: String,
+    pub labels: Vec<String>,
+    pub per_text: Vec<Vec<f32>>,
+    pub aggregate: Vec<f32>,
 }
 
 pub struct CachedEmbedding {
