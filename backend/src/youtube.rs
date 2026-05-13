@@ -78,22 +78,25 @@ impl YoutubeClient {
             .collect();
         let resp = self.embedder.emotion(&texts, Some(&weights)).await?;
 
-        let agg = resp.aggregate;
-        let by_label = |name: &str| -> f32 {
-            resp.labels
+        let agg = &resp.aggregate;
+        let pick = |name: &str| -> AppResult<f32> {
+            let i = resp
+                .labels
                 .iter()
                 .position(|l| l == name)
-                .and_then(|i| agg.get(i).copied())
-                .unwrap_or(0.0)
+                .ok_or_else(|| AppError::Upstream(format!("emotion label missing: {name}")))?;
+            agg.get(i)
+                .copied()
+                .ok_or_else(|| AppError::Upstream(format!("emotion score missing: {name}")))
         };
         let vec = EmotionVec {
-            joy: by_label("joy"),
-            sadness: by_label("sadness"),
-            anger: by_label("anger"),
-            fear: by_label("fear"),
-            surprise: by_label("surprise"),
-            disgust: by_label("disgust"),
-            neutral: by_label("neutral"),
+            joy: pick("joy")?,
+            sadness: pick("sadness")?,
+            anger: pick("anger")?,
+            fear: pick("fear")?,
+            surprise: pick("surprise")?,
+            disgust: pick("disgust")?,
+            neutral: pick("neutral")?,
             comment_count: comments.len() as i32,
         };
         self.store_emotion(spotify_track_id, &vec).await?;
@@ -167,7 +170,10 @@ impl YoutubeClient {
         .bind(id)
         .fetch_optional(&self.db)
         .await?;
-        Ok(row.and_then(|r| r.try_get::<Option<String>, _>("video_id").ok().flatten()))
+        match row {
+            None => Ok(None),
+            Some(r) => r.try_get::<Option<String>, _>("video_id"),
+        }
     }
 
     async fn store_video(&self, id: &str, m: &MatchResponse) -> sqlx::Result<()> {
@@ -192,18 +198,22 @@ impl YoutubeClient {
         Ok(())
     }
 
-    async fn cached_comments(&self, video_id: &str) -> sqlx::Result<Option<Vec<Comment>>> {
+    async fn cached_comments(&self, video_id: &str) -> AppResult<Option<Vec<Comment>>> {
         let row = sqlx::query("SELECT comments FROM track_comments WHERE video_id = $1")
             .bind(video_id)
             .fetch_optional(&self.db)
             .await?;
         let Some(r) = row else { return Ok(None) };
         let json: serde_json::Value = r.try_get("comments")?;
-        Ok(serde_json::from_value(json).ok())
+        let parsed = serde_json::from_value(json).map_err(|e| {
+            AppError::Internal(anyhow::anyhow!("track_comments row corrupt: {e}"))
+        })?;
+        Ok(Some(parsed))
     }
 
     async fn store_comments(&self, video_id: &str, comments: &[Comment]) -> sqlx::Result<()> {
-        let json = serde_json::to_value(comments).unwrap_or(serde_json::Value::Array(vec![]));
+        let json = serde_json::to_value(comments)
+            .expect("comment vec is always JSON-serializable");
         sqlx::query(
             "INSERT INTO track_comments (video_id, comments, fetched_at) \
              VALUES ($1, $2, now()) \

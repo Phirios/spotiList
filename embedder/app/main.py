@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Any, List, Optional
 
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import KMeans
@@ -120,11 +120,12 @@ def emotion(req: EmotionRequest):
     clf = state["emotion"]
     assert clf is not None, "emotion model not loaded"
     if req.weights is not None and len(req.weights) != len(req.texts):
-        return EmotionResponse(
-            model=EMOTION_MODEL,
-            labels=EMOTION_LABELS,
-            per_text=[],
-            aggregate=[0.0] * len(EMOTION_LABELS),
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"weights length ({len(req.weights)}) does not match "
+                f"texts length ({len(req.texts)})"
+            ),
         )
 
     raw = clf(req.texts)
